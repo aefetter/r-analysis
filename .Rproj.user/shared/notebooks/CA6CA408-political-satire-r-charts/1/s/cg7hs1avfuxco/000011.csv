@@ -1,0 +1,3 @@
+"0",""
+"0","# Step 4: Save the heatmap"
+"0","ggsave(""snl_topics_heatmap_faceted.pdf"", heatmap_vis, width = 12, height = 10)"

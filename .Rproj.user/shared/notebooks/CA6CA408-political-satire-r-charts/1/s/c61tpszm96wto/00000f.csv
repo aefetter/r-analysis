@@ -1,0 +1,3 @@
+"0","#read in other chart for topic analysis"
+"0","snl_topics <- read_excel(""data/SNL-topics.xlsx"")"
+"0","View(snl_topics)"

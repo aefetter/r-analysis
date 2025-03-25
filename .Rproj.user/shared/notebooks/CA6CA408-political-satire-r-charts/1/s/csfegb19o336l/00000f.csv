@@ -1,0 +1,7 @@
+"0","#testing a grouped bar chart"
+"0","# Prepare the data for the grouped bar chart"
+"0","snl_topics_grouped_data <- snl_topics_heatmap_data %>%"
+"0","  group_by(topic, candidate) %>%"
+"0","  summarize(mentioned_count = sum(mentioned), .groups = ""drop"")"
+"2","Error: object 'snl_topics_heatmap_data' not found
+"

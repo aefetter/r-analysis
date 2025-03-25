@@ -1,0 +1,10 @@
+"0","snl_airtime <- read_csv(""data/snl-airtime.csv"")"
+"2","[1mRows: [22m[34m18[39m [1mColumns: [22m[34m6[39m"
+"2","[36m──[39m [1mColumn specification[22m [36m─────────────────────────────────────────────────────────────────────────────────────────────────[39m
+[1mDelimiter:[22m "",""
+[31mchr[39m  (5): date, show, source, trump air time stamps, harris air time stamps
+[34mtime[39m (1): run time (total)"
+"2","
+[36mℹ[39m Use `spec()` to retrieve the full column specification for this data.
+[36mℹ[39m Specify the column types or set `show_col_types = FALSE` to quiet this message."
+"0","View(snl_airtime)"
