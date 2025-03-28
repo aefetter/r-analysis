@@ -1,8 +1,0 @@
-"0",""
-"0","ggsave("
-"0","  ""snl_airtime_faceted.pdf"", "
-"0","  all_episodes_vis, "
-"0","  width = 12, "
-"0","  height = 24, "
-"0","  limitsize = FALSE"
-"0",")"

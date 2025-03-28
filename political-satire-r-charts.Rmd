@@ -14,6 +14,7 @@ library(stringr)
 library(hms)
 library(readr)
 library(readxl)
+library(patchwork)
 ```
 
 ### Step 1. Read in the data
@@ -22,6 +23,37 @@ snl_airtime <- read_csv("data/snl-airtime.csv")
 View(snl_airtime)
 ```
 
+```{r}
+#setting a theme so all charts look cohesive
+theme_academic <- function(base_size = 14, base_family = "") {
+  theme_minimal(base_size = base_size, base_family = base_family) +
+    theme(
+      strip.text = element_text(face = "bold", size = 10),
+      axis.text.y = element_blank(),
+      axis.ticks.y = element_blank(),
+      panel.grid.major.y = element_blank(),
+      panel.grid.minor.y = element_blank(),
+      panel.grid.major.x = element_line(color = "grey80", size = 0.3),
+      panel.grid.minor.x = element_line(color = "grey90", size = 0.2),
+      plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+      plot.subtitle = element_text(size = 12, hjust = 0.5),
+      axis.text.x = element_text(size = 10, color = "black"),
+      plot.background = element_rect(fill = "white", color = NA)
+    )
+}
+# Add a fixed aspect ratio to your chart
+coord_fixed(ratio = 0.1)  # Adjust the ratio as needed
+
+# Set the custom theme globally
+theme_set(theme_academic())
+
+# wrapper function to save charts with consistent dimensions
+# Wrapper function for consistent chart styling and saving
+save_academic_chart <- function(plot, filename, width = 8, height = 11, dpi = 300) {
+  plot <- plot + theme_academic()  # Apply the custom theme without coord_fixed()
+  ggsave(filename, plot = plot, width = width, height = height, dpi = dpi)
+}
+```
 ```{r}
 #read in other chart for topic analysis
 snl_topics <- read_excel("data/SNL-topics.xlsx")
@@ -190,10 +222,13 @@ airtime_per_candidate_vis <- ggplot() +
 # Print the visualization
 airtime_per_candidate_vis
 ```
-
 #Step 4. Make this chart for every SNL episode in the database. Make it so it can fit on one sheet
 ```{r}
-# Step 1: Process all episodes
+# --- Ensure dates are properly formatted ---
+snl_airtime_processed <- snl_airtime_processed %>%
+  mutate(date = as.Date(date, format = "%Y-%m-%d"))  # Adjust format if needed
+
+# --- Step 1: Process all episodes into segments ---
 all_segments <- data.frame(
   start = numeric(0),
   end = numeric(0), 
@@ -204,8 +239,10 @@ all_segments <- data.frame(
 
 for (i in 1:nrow(snl_airtime_processed)) {
   episode <- snl_airtime_processed[i, ]
-  episode_title <- as.character(episode$show)
-  episode_length <- episode$episode_length_seconds
+  episode_title <- paste0(
+    str_remove(episode$show, "SNL "),
+    " (", format(episode$date, "%b %d, %Y"), ")"
+  )
   
   # Process Trump and Harris airtime
   trump_segments <- process_timestamps(episode$`trump air time stamps`, "Trump")
@@ -223,22 +260,30 @@ for (i in 1:nrow(snl_airtime_processed)) {
   }
 }
 
-# Verify we have data in all_segments
-print(paste("Number of rows in all_segments:", nrow(all_segments)))
-print(head(all_segments))
-
-# Check for any episodes with no segments
-episodes_with_segments <- unique(all_segments$episode)
-all_episodes <- unique(snl_airtime_processed$show)
-missing_episodes <- setdiff(all_episodes, episodes_with_segments)
-print(paste("Episodes with no segments:", paste(missing_episodes, collapse=", ")))
-
-# Create a data frame for grey bars with exactly the same episode names
+# --- Step 2: Create the episode_bars dataframe ---
 episode_bars <- snl_airtime_processed %>%
-  select(show, episode_length_seconds) %>%
-  rename(episode = show)
+  mutate(
+    episode = paste0(
+      str_remove(show, "SNL "),
+      " (", format(date, "%b %d, %Y"), ")"
+    )
+  ) %>%
+  select(episode, episode_length_seconds, date) %>%
+  arrange(date)  # Sort by air date
 
-# Step 2: Create the faceted visualization with debugging - FIXED VERSION
+# Set episode factor levels in order of air date
+episode_bars <- episode_bars %>%
+  mutate(episode = factor(episode, levels = episode))
+
+# --- Step 3: Join air dates into all_segments for plotting ---
+all_segments <- all_segments %>%
+  left_join(
+    episode_bars %>% select(episode, date),
+    by = "episode"
+  ) %>%
+  arrange(date)
+
+# --- Step 4: Create the faceted visualization ---
 all_episodes_vis <- ggplot() +
   # Draw the full episode bar (grey) for all episodes
   geom_rect(
@@ -247,38 +292,38 @@ all_episodes_vis <- ggplot() +
     fill = "grey90", color = "black", size = 0.3
   ) +
   
-  # Add Trump segments with more explicit mapping
+  # Add Trump segments
   geom_rect(
     data = filter(all_segments, candidate == "Trump"),
     aes(xmin = start, xmax = end, ymin = 0.5, ymax = 1, group = episode),
-    fill = "red", color = "darkred", alpha = 0.8, size = 0.5
+    fill = "red", alpha = 0.8
   ) +
   
-  # Add Harris segments with more explicit mapping
+  # Add Harris segments
   geom_rect(
     data = filter(all_segments, candidate == "Harris"),
     aes(xmin = start, xmax = end, ymin = 0, ymax = 0.5, group = episode),
-    fill = "blue", color = "darkblue", alpha = 0.8, size = 0.5
+    fill = "blue", alpha = 0.8
   ) +
   
-  # Add tick marks - keep scales consistent
+  # Add tick marks for every minute and every 15 seconds
   scale_x_continuous(
     breaks = seq(0, max(episode_bars$episode_length_seconds), by = 60),
     minor_breaks = seq(0, max(episode_bars$episode_length_seconds), by = 15),
     labels = function(x) sprintf("%d:%02d", x %/% 60, x %% 60)
   ) +
   
-  # Force a more explicit interaction between facets and data
-  facet_wrap(~ episode, ncol = 1, scales = "free_x", drop = FALSE) +
+  # Facet by episode, in air-date order
+  facet_wrap(~ episode, ncol = 1, scales = "free_x") +
   
-  # Rest of your code stays the same
+  # Add labels and theme
   labs(
     title = "SNL Airtime Visualization for All Episodes",
     subtitle = "Red: Trump Airtime | Blue: Harris Airtime",
     x = "Time (minutes:seconds)",
     y = NULL
   ) +
-  theme_minimal() +
+  theme_minimal(base_size = 14) +
   theme(
     strip.text = element_text(face = "bold", size = 10),
     axis.text.y = element_blank(),
@@ -292,16 +337,18 @@ all_episodes_vis <- ggplot() +
     axis.text.x = element_text(size = 10, color = "black")
   )
 
-# Step 3: Print the visualization
-print(all_episodes_vis)
-
+# --- Step 5: Save the visualization ---
 ggsave(
-  "snl_airtime_faceted.pdf", 
+  "snl_airtime_faceted_sorted_by_date_again_3pm.pdf", 
   all_episodes_vis, 
   width = 12, 
   height = 24, 
   limitsize = FALSE
 )
+
+# Optional: View first few episodes
+head(episode_bars)
+
 ```
 
 ### Topic analysis
@@ -375,54 +422,6 @@ head(snl_heatmap_data)
 ```
 
 ```{r}
-#creating the heatmap based off SNL heatmap data
-
-# Step 1: Pivot the data to long format
-heatmap_long <- snl_heatmap_data %>%
-  pivot_longer(
-    cols = c(economics, reproductive_rights, immigration, democracy),
-    names_to = "topic",
-    values_to = "mentioned_by"
-  )
-
-# Step 2: Set color palette
-mention_colors <- c(
-  "Trump" = "red",
-  "Harris" = "blue",
-  "Both" = "purple",
-  "None" = "grey90"
-)
-
-# Step 3: Set election day
-election_day <- as.Date("2024-11-05")
-
-# Step 4: Plot
-heatmap_plot <- ggplot(heatmap_long, aes(x = date, y = fct_rev(topic), fill = mentioned_by)) +
-  geom_tile(color = "white", linewidth = 0.5) +
-  scale_fill_manual(values = mention_colors, name = "Mentioned By") +
-  labs(
-    title = "SNL Mentions by Topic and Candidate Over Time",
-    x = "Episode Air Date",
-    y = "Topic"
-  ) +
-  scale_x_date(date_breaks = "1 week", date_labels = "%b %d") +  # Nice weekly labels
-  theme_minimal(base_size = 14) +
-  theme(
-    axis.text.x = element_text(angle = 45, hjust = 1),
-    panel.grid = element_blank()
-  ) +
-  geom_vline(xintercept = as.Date("2024-11-05"), linetype = "dashed", color = "black")
-
-
-# Step 5: Print and save
-print(heatmap_plot)
-
-ggsave("snl_topic_heatmap_final.png", plot = heatmap_plot, width = 10, height = 6, dpi = 300)
-
-```
-
-```{r}
-library(patchwork)  # For combining plots
 
 # First, build labels like: 1 (Oct 01)
 snl_heatmap_data <- snl_heatmap_data %>%
@@ -449,7 +448,7 @@ mention_colors <- c(
 )
 
 # Build the heatmap
-heatmap_plot <- ggplot(heatmap_long, aes(x = factor(ep_label, levels = unique(snl_heatmap_data$ep_label)), 
+snl_heatmap_plot <- ggplot(heatmap_long, aes(x = factor(ep_label, levels = unique(snl_heatmap_data$ep_label)), 
                                          y = fct_rev(topic), fill = mentioned_by)) +
   geom_tile(color = "white", linewidth = 0.5) +
   scale_fill_manual(values = mention_colors, name = "Mentioned By") +
@@ -461,7 +460,8 @@ heatmap_plot <- ggplot(heatmap_long, aes(x = factor(ep_label, levels = unique(sn
   theme_minimal(base_size = 14) +
   theme(
     axis.text.x = element_text(angle = 45, hjust = 1),
-    panel.grid = element_blank()
+    panel.grid = element_blank(),
+    plot.background = element_rect(fill = "white", color = NA)
   ) +
   geom_vline(
     xintercept = which(snl_heatmap_data$date == as.Date("2024-11-05")),
@@ -469,6 +469,264 @@ heatmap_plot <- ggplot(heatmap_long, aes(x = factor(ep_label, levels = unique(sn
   )
 
 # Save the final version
-ggsave("snl_heatmap_final.png", plot = heatmap_plot, width = 12, height = 6, dpi = 300)
+ggsave("snl_heatmap_topics.png", plot = snl_heatmap_plot, width = 12, height = 6, dpi = 300)
+```
 
+## Repeat the analysis for LWT
+```{r}
+# Read in data
+LWT_airtime <- read_csv("data/LWT-airtime.csv")
+LWT_topics <- read_excel("data/LWT-topics.xlsx")
+```
+
+```{r}
+summary(LWT_airtime)
+```
+
+```{r}
+# Step 1: Process the LWT airtime data with corrected runtime parsing for HH:MM:SS
+LWT_airtime_processed <- LWT_airtime %>%
+  mutate(
+    # Correctly parse "run time (total)" from HH:MM:SS to total seconds
+    episode_length_seconds = sapply(`run time (total)`, function(runtime) {
+      time_parts <- unlist(strsplit(as.character(runtime), ":"))
+      # Handle HH:MM:SS format
+      if (length(time_parts) == 3) {
+        as.numeric(time_parts[1]) * 3600 +  # Hours to seconds
+        as.numeric(time_parts[2]) * 60 +   # Minutes to seconds
+        as.numeric(time_parts[3])          # Seconds
+      } else if (length(time_parts) == 2) {
+        as.numeric(time_parts[1]) * 60 +   # Minutes to seconds
+        as.numeric(time_parts[2])          # Seconds
+      } else {
+        as.numeric(time_parts[1])          # Seconds only
+      }
+    }),
+    
+    # Calculate total airtime in seconds for Trump and Harris
+    total_trump_airtime_seconds = sapply(`trump air time stamps`, calculate_duration),
+    total_harris_airtime_seconds = sapply(`harris air time stamps`, calculate_duration),
+    
+    # Convert airtime to minutes for easier interpretation
+    total_trump_airtime_minutes = round(total_trump_airtime_seconds / 60, 2),
+    total_harris_airtime_minutes = round(total_harris_airtime_seconds / 60, 2)
+  )
+
+# Convert the date column to Date format
+LWT_airtime_processed <- LWT_airtime_processed %>%
+  mutate(date = as.Date(date, format = "%d-%b-%y"))
+```
+
+```{r}
+#create airtime visualizations
+# Step 2: Process all episodes into segments
+all_segments_lwt <- data.frame(
+  start = numeric(0),
+  end = numeric(0), 
+  candidate = character(0),
+  episode = character(0),
+  stringsAsFactors = FALSE
+)
+
+for (i in 1:nrow(LWT_airtime_processed)) {
+  episode <- LWT_airtime_processed[i, ]
+  episode_title <- paste0(
+    episode$show,
+    " (", format(episode$date, "%b %d, %Y"), ")"
+  )
+  
+  # Process Trump and Harris airtime
+  trump_segments <- process_timestamps(episode$`trump air time stamps`, "Trump")
+  harris_segments <- process_timestamps(episode$`harris air time stamps`, "Harris")
+  
+  # Add episode title to each segment
+  if (nrow(trump_segments) > 0) {
+    trump_segments$episode <- episode_title
+    all_segments_lwt <- rbind(all_segments_lwt, trump_segments)
+  }
+  
+  if (nrow(harris_segments) > 0) {
+    harris_segments$episode <- episode_title
+    all_segments_lwt <- rbind(all_segments_lwt, harris_segments)
+  }
+}
+```
+
+```{r}
+# Check the structure of the date column
+str(LWT_airtime_processed$date)
+
+# View unique values in the date column
+unique(LWT_airtime_processed$date)
+```
+
+```{r}
+# Step 3: Create the episode_bars dataframe
+episode_bars_lwt <- LWT_airtime_processed %>%
+  mutate(
+    episode = paste0(
+      show,
+      " (", format(date, "%b %d, %Y"), ")"
+    )
+  ) %>%
+  select(episode, episode_length_seconds, date) %>%
+  arrange(date)  # Sort by air date
+
+# Set episode factor levels in order of air date
+episode_bars_lwt <- episode_bars_lwt %>%
+  mutate(episode = factor(episode, levels = episode))
+```
+
+```{r}
+# Step 4: Create the faceted visualization
+all_episodes_vis_lwt <- ggplot() +
+  # Draw the full episode bar (grey) for all episodes
+  geom_rect(
+    data = episode_bars_lwt,
+    aes(xmin = 0, xmax = episode_length_seconds, ymin = 0, ymax = 1, group = episode),
+    fill = "grey90", color = "black", size = 0.3
+  ) +
+  
+  # Add Trump segments
+  geom_rect(
+    data = filter(all_segments_lwt, candidate == "Trump"),
+    aes(xmin = start, xmax = end, ymin = 0.5, ymax = 1, group = episode),
+    fill = "red", alpha = 0.8
+  ) +
+  
+  # Add Harris segments
+  geom_rect(
+    data = filter(all_segments_lwt, candidate == "Harris"),
+    aes(xmin = start, xmax = end, ymin = 0, ymax = 0.5, group = episode),
+    fill = "blue", alpha = 0.8
+  ) +
+  
+  # Add tick marks for every minute and every 15 seconds
+scale_x_continuous(
+    breaks = seq(0, max(episode_bars_lwt$episode_length_seconds), by = 300),  # Tick marks every 5 minutes (300 seconds)
+    minor_breaks = seq(0, max(episode_bars_lwt$episode_length_seconds), by = 60),  # Minor tick marks every 1 minute
+    labels = function(x) sprintf("%d:%02d", x %/% 60, x %% 60)  # Format as mm:ss
+  ) +
+  
+  # Facet by episode, in air-date order
+  facet_wrap(~ episode, ncol = 1, scales = "free_x") +
+  
+  # Add labels and theme
+  labs(
+    title = "LWT Airtime Visualization for All Episodes",
+    subtitle = "Red: Trump Airtime | Blue: Harris Airtime",
+    x = "Time (minutes:seconds)",
+    y = NULL
+  ) +
+  theme_academic()  # Apply the custom theme
+
+# Save the chart without coord_fixed()
+all_episodes_vis_lwt <- all_episodes_vis_lwt +
+  facet_wrap(~ episode, ncol = 1, scales = "free_x")  # Keep free_x for independent scales
+
+# Save the chart
+save_academic_chart(all_episodes_vis_lwt, "lwt_airtime_faceted.pdf", width = 8, height = 11)
+```
+
+```{r}
+#now creating the topic heatmap for LWT
+# Step 1: Process the LWT topics data
+LWT_topics_processed <- LWT_topics %>%
+  mutate(across(
+    contains(c("reproductive", "immigration", "economics", "democracy")),
+    ~ case_when(
+        str_detect(., regex("No (mention|statements)", ignore_case = TRUE)) ~ FALSE,  # Match "no mentions" or "no statements"
+        is.na(.) ~ NA,  # Keep NA as NA
+        TRUE ~ TRUE  # Everything else is TRUE
+      ),
+    .names = "mentioned_{.col}"  # Create new columns with "mentioned_" prefix
+  ))
+
+# Create heatmap data
+# Step 2: Create the heatmap dataset
+lwt_heatmap_data <- LWT_topics_processed %>%
+  mutate(
+    economics = case_when(
+      `mentioned_Trump Economics` == TRUE & `mentioned_Harris Economics` == FALSE ~ "Trump",
+      `mentioned_Trump Economics` == FALSE & `mentioned_Harris Economics` == TRUE ~ "Harris",
+      `mentioned_Trump Economics` == TRUE & `mentioned_Harris Economics` == TRUE ~ "Both",
+      TRUE ~ "None"  # Default case when neither is TRUE
+    ),
+    reproductive_rights = case_when(
+      `mentioned_Trump reproductive rights` == TRUE & `mentioned_Harris reproductive rights` == FALSE ~ "Trump",
+      `mentioned_Trump reproductive rights` == FALSE & `mentioned_Harris reproductive rights` == TRUE ~ "Harris",
+      `mentioned_Trump reproductive rights` == TRUE & `mentioned_Harris reproductive rights` == TRUE ~ "Both",
+      TRUE ~ "None"  # Default case when neither is TRUE
+    ),
+    immigration = case_when(
+      `mentioned_Trump immigration` == TRUE & `mentioned_Harris immigration` == FALSE ~ "Trump",
+      `mentioned_Trump immigration` == FALSE & `mentioned_Harris immigration` == TRUE ~ "Harris",
+      `mentioned_Trump immigration` == TRUE & `mentioned_Harris immigration` == TRUE ~ "Both",
+      TRUE ~ "None"  # Default case when neither is TRUE
+    ),
+    democracy = case_when(
+      `mentioned_Trump Democracy` == TRUE & `mentioned_Harris Democracy` == FALSE ~ "Trump",
+      `mentioned_Trump Democracy` == FALSE & `mentioned_Harris Democracy` == TRUE ~ "Harris",
+      `mentioned_Trump Democracy` == TRUE & `mentioned_Harris Democracy` == TRUE ~ "Both",
+      TRUE ~ "None"  # Default case when neither is TRUE
+    )
+  ) %>%
+  select(show, date, economics, reproductive_rights, immigration, democracy)
+
+unique(LWT_topics$date)
+
+lwt_heatmap_data <- lwt_heatmap_data %>%
+  mutate(date = as.Date(date, format = "%d-%b-%y"))
+  
+# View the first few rows of the heatmap dataset
+head(lwt_heatmap_data)
+```
+
+```{r}
+# Step 3: Prepare the data for plotting
+lwt_heatmap_data <- lwt_heatmap_data %>%
+  arrange(date) %>%
+  mutate(
+    ep_num = row_number(),  # Create episode numbers
+    ep_label = paste0(ep_num, " (", format(date, "%b %d"), ")")  # Create episode labels
+  )
+
+
+
+# Pivot to long format
+heatmap_long <- lwt_heatmap_data %>%
+  pivot_longer(
+    cols = c(economics, reproductive_rights, immigration, democracy),
+    names_to = "topic",
+    values_to = "mentioned_by"
+  )
+```
+
+```{r}
+#create the heatmap
+# Step 4: Create the heatmap
+lwt_heatmap_plot <- ggplot(heatmap_long, aes(x = factor(ep_label, levels = unique(lwt_heatmap_data$ep_label)), 
+                                             y = fct_rev(topic), fill = mentioned_by)) +
+  geom_tile(color = "white", linewidth = 0.5) +
+  scale_fill_manual(values = mention_colors, name = "Mentioned By") +
+  labs(
+    title = "LWT Mentions by Topic and Candidate",
+    x = "Episode Number (Air Date)",
+    y = "Topic"
+  ) +
+  theme_academic() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid = element_blank(),
+    plot.background = element_rect(fill = "white", color = NA)
+  )
+
+# Print the heatmap
+print(lwt_heatmap_plot)
+
+# Save the heatmap
+ggsave("lwt_heatmap_topics.png", plot = lwt_heatmap_plot, width = 12, height = 6, dpi = 300)
+```
+### Building cumulative visualizations
+```{r}
 ```
