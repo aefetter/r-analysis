@@ -15,6 +15,7 @@ library(hms)
 library(readr)
 library(readxl)
 library(patchwork)
+library(ggforce)
 ```
 
 ### Step 1. Read in the data
@@ -129,106 +130,34 @@ process_timestamps <- function(timestamps, candidate) {
   
   return(segments)
 }
+
+str(snl_airtime$date)
 ```
 
-### Step 2. Add a few more charts for total airtime
+### Airtime visualization for SNL
 ```{r}
-# Create expanded dataset with duration calculations while keeping original data
-snl_airtime_processed <- snl_airtime %>% 
+# Process the SNL airtime data
+snl_airtime_processed <- snl_airtime %>%
   mutate(
-    # Calculate total airtime in seconds
+    # Calculate total airtime in seconds for Trump and Harris
     total_trump_airtime_seconds = sapply(`trump air time stamps`, calculate_duration),
     total_harris_airtime_seconds = sapply(`harris air time stamps`, calculate_duration),
     
-    # Convert to minutes for easier interpretation
+    # Convert airtime to minutes for easier interpretation
     total_trump_airtime_minutes = round(total_trump_airtime_seconds / 60, 2),
-    total_harris_airtime_minutes = round(total_harris_airtime_seconds / 60, 2)
-  )
-```
-
-```{r}
-# Update the processed dataframe to correctly parse "run time (total)" as MM:SS
-snl_airtime_processed <- snl_airtime_processed %>%
-  mutate(
+    total_harris_airtime_minutes = round(total_harris_airtime_seconds / 60, 2),
+    
     # Convert "run time (total)" from MM:SS to total seconds
     episode_length_seconds = sapply(`run time (total)`, function(runtime) {
       time_parts <- unlist(strsplit(as.character(runtime), ":"))
       as.numeric(time_parts[1]) * 60 + as.numeric(time_parts[2])
-    })
-  )
-```
-
-### Step 3. Create a cool data visualization to show the airtime for each candidate for one episode
-
-```{r}
-# Example: Process the first episode
-first_episode <- snl_airtime_processed[1, ]  # Get the first episode
-episode_title <- first_episode$show
-episode_length <- first_episode$episode_length_seconds  # Use the parsed episode length
-
-# Process Trump and Harris airtime
-trump_segments <- process_timestamps(first_episode$`trump air time stamps`, "Trump")
-harris_segments <- process_timestamps(first_episode$`harris air time stamps`, "Harris")
-
-# Combine the segments into one dataframe
-all_segments <- rbind(trump_segments, harris_segments)
-
-# Create the visualization
-airtime_per_candidate_vis <- ggplot() +
-  # Draw the full episode bar (grey)
-  geom_rect(aes(xmin = 0, xmax = episode_length, ymin = 0, ymax = 1), fill = "grey90", color = "black", size = 0.3) +
-  
-  # Highlight Trump's airtime (top half of the bar)
-  geom_rect(
-    data = filter(all_segments, candidate == "Trump"),
-    aes(xmin = start, xmax = end, ymin = 0.5, ymax = 1),
-    fill = "red", alpha = 0.8
-  ) +
-  
-  # Highlight Harris's airtime (bottom half of the bar)
-  geom_rect(
-    data = filter(all_segments, candidate == "Harris"),
-    aes(xmin = start, xmax = end, ymin = 0, ymax = 0.5),
-    fill = "blue", alpha = 0.8
-  ) +
-  
-  # Add tick marks for every minute and every 15 seconds
-  scale_x_continuous(
-    breaks = seq(0, episode_length, by = 60),  # Tick marks every minute
-    minor_breaks = seq(0, episode_length, by = 15),  # Minor tick marks every 15 seconds
-    labels = function(x) sprintf("%d:%02d", x %/% 60, x %% 60)  # Format as mm:ss
-  ) +
-  
-  # Add labels and theme
-  labs(
-    title = paste(episode_title),
-    subtitle = "Red: Trump Airtime | Blue: Harris Airtime",
-    x = "Time (minutes:seconds)",
-    y = NULL
-  ) +
-  theme_minimal(base_size = 14) +
-  theme(
-    axis.text.y = element_blank(),
-    axis.ticks.y = element_blank(),
-    panel.grid.major.y = element_blank(),
-    panel.grid.minor.y = element_blank(),
-    panel.grid.major.x = element_line(color = "grey80", size = 0.3),
-    panel.grid.minor.x = element_line(color = "grey90", size = 0.2),
-    plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
-    plot.subtitle = element_text(size = 12, hjust = 0.5),
-    axis.text.x = element_text(size = 10, color = "black")
+    }),
+    
+    # Convert the date column to Date format
+    date = as.Date(date, format = "%d-%b-%y")
   )
 
-# Print the visualization
-airtime_per_candidate_vis
-```
-#Step 4. Make this chart for every SNL episode in the database. Make it so it can fit on one sheet
-```{r}
-# --- Ensure dates are properly formatted ---
-snl_airtime_processed <- snl_airtime_processed %>%
-  mutate(date = as.Date(date, format = "%Y-%m-%d"))  # Adjust format if needed
-
-# --- Step 1: Process all episodes into segments ---
+# Rebuild all_segments for SNL
 all_segments <- data.frame(
   start = numeric(0),
   end = numeric(0), 
@@ -237,6 +166,7 @@ all_segments <- data.frame(
   stringsAsFactors = FALSE
 )
 
+# Loop through all episodes in snl_airtime_processed
 for (i in 1:nrow(snl_airtime_processed)) {
   episode <- snl_airtime_processed[i, ]
   episode_title <- paste0(
@@ -260,95 +190,97 @@ for (i in 1:nrow(snl_airtime_processed)) {
   }
 }
 
-# --- Step 2: Create the episode_bars dataframe ---
+# Create the episode_bars dataframe
 episode_bars <- snl_airtime_processed %>%
   mutate(
     episode = paste0(
       str_remove(show, "SNL "),
       " (", format(date, "%b %d, %Y"), ")"
-    )
+    ),
+    episode_index = row_number()
   ) %>%
-  select(episode, episode_length_seconds, date) %>%
-  arrange(date)  # Sort by air date
+  select(episode, episode_length_seconds, date, episode_index)
 
-# Set episode factor levels in order of air date
-episode_bars <- episode_bars %>%
-  mutate(episode = factor(episode, levels = episode))
-
-# --- Step 3: Join air dates into all_segments for plotting ---
+  # Clean up the `episode` column in both data frames to ensure consistency
 all_segments <- all_segments %>%
-  left_join(
-    episode_bars %>% select(episode, date),
-    by = "episode"
-  ) %>%
-  arrange(date)
-
-# --- Step 4: Create the faceted visualization ---
-all_episodes_vis <- ggplot() +
-  # Draw the full episode bar (grey) for all episodes
-  geom_rect(
-    data = episode_bars,
-    aes(xmin = 0, xmax = episode_length_seconds, ymin = 0, ymax = 1, group = episode),
-    fill = "grey90", color = "black", size = 0.3
-  ) +
-  
-  # Add Trump segments
-  geom_rect(
-    data = filter(all_segments, candidate == "Trump"),
-    aes(xmin = start, xmax = end, ymin = 0.5, ymax = 1, group = episode),
-    fill = "red", alpha = 0.8
-  ) +
-  
-  # Add Harris segments
-  geom_rect(
-    data = filter(all_segments, candidate == "Harris"),
-    aes(xmin = start, xmax = end, ymin = 0, ymax = 0.5, group = episode),
-    fill = "blue", alpha = 0.8
-  ) +
-  
-  # Add tick marks for every minute and every 15 seconds
-  scale_x_continuous(
-    breaks = seq(0, max(episode_bars$episode_length_seconds), by = 60),
-    minor_breaks = seq(0, max(episode_bars$episode_length_seconds), by = 15),
-    labels = function(x) sprintf("%d:%02d", x %/% 60, x %% 60)
-  ) +
-  
-  # Facet by episode, in air-date order
-  facet_wrap(~ episode, ncol = 1, scales = "free_x") +
-  
-  # Add labels and theme
-  labs(
-    title = "SNL Airtime Visualization for All Episodes",
-    subtitle = "Red: Trump Airtime | Blue: Harris Airtime",
-    x = "Time (minutes:seconds)",
-    y = NULL
-  ) +
-  theme_minimal(base_size = 14) +
-  theme(
-    strip.text = element_text(face = "bold", size = 10),
-    axis.text.y = element_blank(),
-    axis.ticks.y = element_blank(),
-    panel.grid.major.y = element_blank(),
-    panel.grid.minor.y = element_blank(),
-    panel.grid.major.x = element_line(color = "grey80", size = 0.3),
-    panel.grid.minor.x = element_line(color = "grey90", size = 0.2),
-    plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
-    plot.subtitle = element_text(size = 12, hjust = 0.5),
-    axis.text.x = element_text(size = 10, color = "black")
+  mutate(
+    episode = gsub("\"", "'", episode),  # Replace double quotes with single quotes
+    episode = gsub("’", "'", episode),  # Replace fancy apostrophes with standard ones
+    episode = gsub("“|”", "'", episode), # Replace fancy quotes with standard ones
+    episode = str_trim(episode)          # Remove leading/trailing whitespace
   )
 
-# --- Step 5: Save the visualization ---
-ggsave(
-  "snl_airtime_faceted_sorted_by_date_again_3pm.pdf", 
-  all_episodes_vis, 
-  width = 12, 
-  height = 24, 
-  limitsize = FALSE
-)
+episode_bars <- episode_bars %>%
+  mutate(
+    episode = gsub("\"", "'", episode),
+    episode = gsub("’", "'", episode),
+    episode = gsub("“|”", "'", episode),
+    episode = str_trim(episode)
+  )
 
-# Optional: View first few episodes
-head(episode_bars)
+# Add the episode index to all_segments by joining with episode_bars
+all_segments <- all_segments %>%
+  left_join(
+    episode_bars %>% select(episode, episode_index),
+    by = "episode"
+  )
 
+  # Create the faceted visualization with pagination
+total_pages <- ceiling(nrow(episode_bars) / 12)  # Calculate total pages (12 episodes per page)
+
+for (page in 1:total_pages) {
+  # Calculate which episode indices belong on this page
+  page_indices <- ((page-1) * 12 + 1):(min(page * 12, nrow(episode_bars)))
+  
+  # Filter data for this page
+  page_bars <- episode_bars %>% filter(episode_index %in% page_indices)
+  page_segments <- all_segments %>% filter(episode_index %in% page_indices)
+  
+  # Generate the visualization for the current page
+  paginated_vis <- ggplot() +
+    # Draw the full episode bar (grey) for all episodes
+    geom_rect(
+      data = page_bars,
+      aes(xmin = 0, xmax = episode_length_seconds, ymin = 0, ymax = 1, group = episode),
+      fill = "grey90", color = "black", linewidth = 0.3
+    ) +
+    
+    # Add Trump segments
+    geom_rect(
+      data = filter(page_segments, candidate == "Trump"),
+      aes(xmin = start, xmax = end, ymin = 0.5, ymax = 1, group = episode),
+      fill = "red", alpha = 0.8
+    ) +
+    
+    # Add Harris segments
+    geom_rect(
+      data = filter(page_segments, candidate == "Harris"),
+      aes(xmin = start, xmax = end, ymin = 0, ymax = 0.5, group = episode),
+      fill = "blue", alpha = 0.8
+    ) +
+    
+    # Add tick marks for every minute and every 15 seconds
+    scale_x_continuous(
+      breaks = seq(0, max(page_bars$episode_length_seconds, na.rm = TRUE), by = 60),  # Tick marks every minute
+      minor_breaks = seq(0, max(page_bars$episode_length_seconds, na.rm = TRUE), by = 15),  # Minor tick marks every 15 seconds
+      labels = function(x) sprintf("%d:%02d", x %/% 60, x %% 60)  # Format as mm:ss
+    ) +
+    
+    # Facet by episode, ordered by the original data order
+    facet_wrap(~ reorder(episode, episode_index), ncol = 1, scales = "free_x") +
+    
+    # Add labels and theme
+    labs(
+      title = paste0("Saturday Night Live Airtime by Candidate (Page ", page, ")"),
+      subtitle = "Red: Trump Airtime | Blue: Harris Airtime",
+      x = "Time (minutes:seconds)",
+      y = NULL
+    ) +
+    theme_academic()
+  
+  # Save the current page
+  save_academic_chart(paginated_vis, paste0("snl_airtime_faceted_page", page, ".pdf"), width = 8.5, height = 11)
+}
 ```
 
 ### Topic analysis
@@ -453,7 +385,7 @@ snl_heatmap_plot <- ggplot(heatmap_long, aes(x = factor(ep_label, levels = uniqu
   geom_tile(color = "white", linewidth = 0.5) +
   scale_fill_manual(values = mention_colors, name = "Mentioned By") +
   labs(
-    title = "SNL Mentions by Topic and Candidate",
+    title = "Saturday Night Live Mentions by Topic and Candidate",
     x = "Episode Number (Air Date)",
     y = "Topic"
   ) +
@@ -613,7 +545,7 @@ scale_x_continuous(
   
   # Add labels and theme
   labs(
-    title = "LWT Airtime Visualization for All Episodes",
+    title = "Last Week Tonight with John Oliver Airtime by Candidate",
     subtitle = "Red: Trump Airtime | Blue: Harris Airtime",
     x = "Time (minutes:seconds)",
     y = NULL
@@ -705,18 +637,20 @@ heatmap_long <- lwt_heatmap_data %>%
 ```{r}
 #create the heatmap
 # Step 4: Create the heatmap
-lwt_heatmap_plot <- ggplot(heatmap_long, aes(x = factor(ep_label, levels = unique(lwt_heatmap_data$ep_label)), 
-                                             y = fct_rev(topic), fill = mentioned_by)) +
+lwt_heatmap_plot <- ggplot(heatmap_long, 
+                          aes(x = factor(ep_label, levels = unique(lwt_heatmap_data$ep_label)), 
+                              y = fct_rev(topic), fill = mentioned_by)) +
   geom_tile(color = "white", linewidth = 0.5) +
   scale_fill_manual(values = mention_colors, name = "Mentioned By") +
   labs(
-    title = "LWT Mentions by Topic and Candidate",
+    title = "Last Week Tonight with John Oliver Mentions by Topic and Candidate",
     x = "Episode Number (Air Date)",
     y = "Topic"
   ) +
   theme_academic() +
   theme(
     axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.text.y = element_text(size = 10, color = "black"), # Explicitly show y-axis text
     panel.grid = element_blank(),
     plot.background = element_rect(fill = "white", color = NA)
   )
@@ -727,6 +661,398 @@ print(lwt_heatmap_plot)
 # Save the heatmap
 ggsave("lwt_heatmap_topics.png", plot = lwt_heatmap_plot, width = 12, height = 6, dpi = 300)
 ```
-### Building cumulative visualizations
+
+#now repeating the analysis for The Late Show with Stephen Colbert
 ```{r}
+#read in data
+tls_airtime <- read_csv("data/tls-airtime.csv")
+tls_topics <- read_excel("data/tls-topics.xlsx")
+
+# Fix the run time column in tls_airtime
+tls_airtime <- tls_airtime %>%
+  mutate(
+    # Convert "run time (total)" from MM:SS to total seconds
+    episode_length_seconds = sapply(`run time`, function(runtime) {
+      time_parts <- unlist(strsplit(as.character(runtime), ":"))
+      if (length(time_parts) == 2) {
+        # Parse as MM:SS
+        as.numeric(time_parts[1]) * 60 + as.numeric(time_parts[2])
+      } else if (length(time_parts) == 3) {
+        # Handle HH:MM:SS (if present)
+        as.numeric(time_parts[1]) * 3600 + as.numeric(time_parts[2]) * 60 + as.numeric(time_parts[3])
+      } else {
+        NA  # Handle unexpected formats
+      }
+    })
+  ) 
+tls_airtime <- tls_airtime %>%
+  mutate(date = as.Date(date, format = "%d-%b-%y"))
+```
+
+#airtime visualization
+```{r}
+# Process airtime for Trump and Harris
+tls_airtime_processed <- tls_airtime %>%
+  mutate(
+    # Calculate total airtime in seconds for Trump and Harris
+    total_trump_airtime_seconds = sapply(`trump air time stamps`, calculate_duration),
+    total_harris_airtime_seconds = sapply(`harris air time stamps`, calculate_duration),
+    
+    # Convert airtime to minutes for easier interpretation
+    total_trump_airtime_minutes = round(total_trump_airtime_seconds / 60, 2),
+    total_harris_airtime_minutes = round(total_harris_airtime_seconds / 60, 2)
+  )
+
+# Process all episodes into segments
+all_segments_tls <- data.frame(
+  start = numeric(0),
+  end = numeric(0), 
+  candidate = character(0),
+  episode = character(0),
+  stringsAsFactors = FALSE
+)
+
+for (i in 1:nrow(tls_airtime_processed)) {
+  episode <- tls_airtime_processed[i, ]
+  episode_title <- paste0(
+    episode$show,
+    " (", format(episode$date, "%b %d, %Y"), ")"
+  )
+  
+  # Process Trump and Harris airtime
+  trump_segments <- process_timestamps(episode$`trump air time stamps`, "Trump")
+  harris_segments <- process_timestamps(episode$`harris air time stamps`, "Harris")
+  
+  # Add episode title to each segment
+  if (nrow(trump_segments) > 0) {
+    trump_segments$episode <- episode_title
+    all_segments_tls <- rbind(all_segments_tls, trump_segments)
+  }
+  
+  if (nrow(harris_segments) > 0) {
+    harris_segments$episode <- episode_title
+    all_segments_tls <- rbind(all_segments_tls, harris_segments)
+  }
+}
+
+# Create the episode_bars dataframe
+episode_bars_tls <- tls_airtime_processed %>%
+  mutate(
+    episode = paste0(
+      show,
+      " (", format(date, "%b %d, %Y"), ")"
+    )
+  ) %>%
+  select(episode, episode_length_seconds, date) %>%
+  arrange(date)  # Sort by air date
+
+
+# Explicitly set factor levels for the episode column based on the date order
+episode_bars_tls <- episode_bars_tls %>%
+  mutate(episode = factor(episode, levels = unique(episode)))
+
+# Apply the same factor levels to all_segments_tls
+all_segments_tls <- all_segments_tls %>%
+  mutate(episode = factor(episode, levels = levels(episode_bars_tls$episode)))
+
+# Clean up quotes and apostrophes in episode titles
+episode_bars_tls <- episode_bars_tls %>%
+  mutate(
+    episode = gsub("\"", "'", episode),  # Replace double quotes with single quotes
+    episode = gsub("’", "'", episode),  # Replace fancy apostrophes with standard ones
+    episode = gsub("“|”", "'", episode) # Replace fancy quotes with standard ones
+  )
+
+all_segments_tls <- all_segments_tls %>%
+  mutate(
+    episode = gsub("\"", "'", episode),
+    episode = gsub("’", "'", episode),
+    episode = gsub("“|”", "'", episode)
+  )
+```
+
+```{r}
+#should output episodes in chronological order
+levels(episode_bars_tls$episode)
+```
+
+```{r}
+# Add a numeric index to tls_airtime_processed to preserve the date order
+tls_airtime_processed <- tls_airtime_processed %>%
+  arrange(date) %>%
+  mutate(episode_index = row_number())
+
+# Create episode_bars_tls with the same index
+episode_bars_tls <- tls_airtime_processed %>%
+  mutate(
+    episode = paste0(
+      show,
+      " (", format(date, "%b %d, %Y"), ")"
+    ),
+    episode_index = row_number()
+  ) %>%
+  select(episode, episode_length_seconds, date, episode_index)
+
+# Add the episode index to all_segments_tls by joining with episode_bars_tls
+all_segments_tls <- all_segments_tls %>%
+  left_join(
+    episode_bars_tls %>% select(episode, episode_index),
+    by = "episode"
+  )
+
+# Create the faceted visualization with pagination using episode_index for ordering
+total_pages <- ceiling(length(unique(episode_bars_tls$episode)) / 12)  # Calculate total pages (12 episodes per page)
+
+# Find the maximum episode length across all episodes
+max_episode_length <- max(episode_bars_tls$episode_length_seconds, na.rm = TRUE)
+
+for (page in 1:total_pages) {
+  # Calculate which episode indices belong on this page
+  page_indices <- ((page-1) * 12 + 1):(min(page * 12, nrow(episode_bars_tls)))
+  
+  # Filter data for this page
+  page_bars <- episode_bars_tls %>% filter(episode_index %in% page_indices)
+  page_segments <- all_segments_tls %>% filter(episode_index %in% page_indices)
+  
+  # Generate the visualization for the current page
+  paginated_vis <- ggplot() +
+    # Draw the full episode bar (grey) for all episodes
+    geom_rect(
+      data = page_bars,
+      aes(xmin = 0, xmax = episode_length_seconds, ymin = 0, ymax = 1, group = episode),
+      fill = "grey90", color = "black", linewidth = 0.3
+    ) +
+    
+    # Add Trump segments
+    geom_rect(
+      data = filter(page_segments, candidate == "Trump"),
+      aes(xmin = start, xmax = end, ymin = 0.5, ymax = 1, group = episode),
+      fill = "red", alpha = 0.8
+    ) +
+    
+    # Add Harris segments
+    geom_rect(
+      data = filter(page_segments, candidate == "Harris"),
+      aes(xmin = start, xmax = end, ymin = 0, ymax = 0.5, group = episode),
+      fill = "blue", alpha = 0.8
+    ) +
+    
+    # Add tick marks for every minute and every 15 seconds
+    scale_x_continuous(
+      breaks = seq(0, max(episode_bars_tls$episode_length_seconds, na.rm = TRUE), by = 60),  # Tick marks every minute
+      minor_breaks = seq(0, max(episode_bars_tls$episode_length_seconds, na.rm = TRUE), by = 15),  # Minor tick marks every 15 seconds
+      labels = function(x) sprintf("%d:%02d", x %/% 60, x %% 60)  # Format as mm:ss
+    ) +
+    
+    # Facet by episode, ordered by the original data order
+    facet_wrap(~ reorder(episode, episode_index), ncol = 1, scales = "free_x") +
+    
+    # Add labels and theme
+    labs(
+      title = "The Late Show with Stephen Colbert Airtime by Candidate",
+      subtitle = "Red: Trump Airtime | Blue: Harris Airtime",
+      x = "Time (minutes:seconds)",
+      y = NULL
+    ) +
+    theme_academic()
+  
+  # Save the current page
+  save_academic_chart(paginated_vis, paste0("tls_airtime_faceted_page", page, ".pdf"), width = 8.5, height = 11)
+}
+```
+
+#now build topic visualizations for TLS
+```{r}
+# Step 1: Process the TLS topics data
+tls_topics_processed <- tls_topics %>%
+  mutate(across(
+    contains(c("reproductive", "immigration", "economics", "democracy")),
+    ~ case_when(
+        str_detect(., regex("No (mention|statements|direct|specific)", ignore_case = TRUE)) ~ FALSE,
+        is.na(.) ~ NA,
+        TRUE ~ TRUE
+      ),
+    .names = "mentioned_{.col}"
+  ))
+
+# Step 2: Create the heatmap dataset
+tls_heatmap_data <- tls_topics_processed %>%
+  mutate(
+    economics = case_when(
+      `mentioned_Trump Economics` == TRUE & `mentioned_Harris Economics` == FALSE ~ "Trump",
+      `mentioned_Trump Economics` == FALSE & `mentioned_Harris Economics` == TRUE ~ "Harris",
+      `mentioned_Trump Economics` == TRUE & `mentioned_Harris Economics` == TRUE ~ "Both",
+      TRUE ~ "None"  # Default case when neither is TRUE
+    ),
+    reproductive_rights = case_when(
+      `mentioned_Trump reproductive rights` == TRUE & `mentioned_Harris reproductive rights` == FALSE ~ "Trump",
+      `mentioned_Trump reproductive rights` == FALSE & `mentioned_Harris reproductive rights` == TRUE ~ "Harris",
+      `mentioned_Trump reproductive rights` == TRUE & `mentioned_Harris reproductive rights` == TRUE ~ "Both",
+      TRUE ~ "None"
+    ),
+    immigration = case_when(
+      `mentioned_Trump immigration` == TRUE & `mentioned_Harris immigration` == FALSE ~ "Trump",
+      `mentioned_Trump immigration` == FALSE & `mentioned_Harris immigration` == TRUE ~ "Harris",
+      `mentioned_Trump immigration` == TRUE & `mentioned_Harris immigration` == TRUE ~ "Both",
+      TRUE ~ "None"
+    )
+  ) %>%
+  select(show, date, economics, reproductive_rights, immigration)
+
+# Make sure date is in the correct format
+tls_heatmap_data <- tls_heatmap_data %>%
+  mutate(date = as.Date(date, format = "%d-%b-%y"))
+
+# Step 3: Prepare the data for plotting
+tls_heatmap_data <- tls_heatmap_data %>%
+  arrange(date) %>%
+  mutate(
+    ep_num = row_number(),  # Create episode numbers
+    ep_label = paste0(ep_num, " (", format(date, "%b %d"), ")")  # Create episode labels
+  )
+
+# Pivot to long format
+tls_heatmap_long <- tls_heatmap_data %>%
+  pivot_longer(
+    cols = c(economics, reproductive_rights, immigration),
+    names_to = "topic",
+    values_to = "mentioned_by"
+  )
+
+# Step 4: Create the heatmap
+# Fix for TLS heatmap
+tls_heatmap_plot <- ggplot(tls_heatmap_long, 
+                          aes(x = factor(ep_label, levels = unique(tls_heatmap_data$ep_label)), 
+                              y = fct_rev(topic), fill = mentioned_by)) +
+  geom_tile(color = "white", linewidth = 0.5) +
+  scale_fill_manual(values = mention_colors, name = "Mentioned By") +
+  labs(
+    title = "The Late Show with Stephen Colbert Mentions by Topic and Candidate",
+    x = "Episode Number (Air Date)",
+    y = "Topic"
+  ) +
+  theme_academic() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.text.y = element_text(size = 10, color = "black"), # Explicitly show y-axis text
+    panel.grid = element_blank(),
+    plot.background = element_rect(fill = "white", color = NA)
+  ) +
+  geom_vline(
+    xintercept = which(tls_heatmap_data$date == as.Date("2024-11-05")),
+    linetype = "dashed", color = "black"
+  )
+
+# Print the heatmap
+print(tls_heatmap_plot)
+
+# Save the heatmap
+ggsave("tls_heatmap_topics.png", plot = tls_heatmap_plot, width = 12, height = 6, dpi = 300)
+```
+
+
+
+
+### Building cumulative visualizations, exploring percentages that each candidate got airtime
+
+```{r}
+# Aggregate airtime by date for SNL to avoide "double stacking"
+snl_airtime_aggregated <- snl_airtime_processed %>%
+  group_by(date) %>%
+  summarize(
+    total_trump_airtime_seconds = sum(total_trump_airtime_seconds, na.rm = TRUE),
+    total_harris_airtime_seconds = sum(total_harris_airtime_seconds, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(show = "SNL")  # Add a column to identify the show
+```
+
+#### Need to make this prettier
+```{r}
+# Combine aggregated SNL data with LWT data
+combined_airtime <- bind_rows(
+  snl_airtime_aggregated,
+  LWT_airtime_processed %>%
+    select(date, total_trump_airtime_seconds, total_harris_airtime_seconds) %>%
+    mutate(show = "LWT")
+)
+
+# Calculate relative airtime percentages
+combined_relative_airtime <- combined_airtime %>%
+  mutate(
+    total_candidate_airtime_seconds = total_trump_airtime_seconds + total_harris_airtime_seconds,
+    trump_airtime_percentage = ifelse(total_candidate_airtime_seconds > 0, 
+                                       (total_trump_airtime_seconds / total_candidate_airtime_seconds) * 100, 
+                                       NA),
+    harris_airtime_percentage = ifelse(total_candidate_airtime_seconds > 0, 
+                                        (total_harris_airtime_seconds / total_candidate_airtime_seconds) * 100, 
+                                        NA)
+  ) %>%
+  select(show, date, trump_airtime_percentage, harris_airtime_percentage)
+
+# Pivot to long format for plotting
+combined_relative_airtime_long <- combined_relative_airtime %>%
+  pivot_longer(
+    cols = c(trump_airtime_percentage, harris_airtime_percentage),
+    names_to = "candidate",
+    values_to = "percentage"
+  ) %>%
+  mutate(
+    candidate = recode(candidate, 
+                        "trump_airtime_percentage" = "Trump", 
+                        "harris_airtime_percentage" = "Harris"),
+    date = as.factor(date)  # Treat date as a factor for proper ordering
+  )
+
+# Create the stacked bar chart
+combined_stacked_bar_chart <- ggplot(combined_relative_airtime_long, aes(x = factor(date), y = percentage, fill = candidate)) +
+  geom_bar(stat = "identity", color = "black") +
+  scale_fill_manual(values = c("Trump" = "red", "Harris" = "blue"), name = "Candidate") +
+  geom_text(aes(label = paste0(round(percentage, 1), "%")), 
+            position = position_stack(vjust = 0.5), size = 3) +  # Add percentage labels
+  facet_wrap(~ show, scales = "free_x") +  # Facet by show with independent x-axis scales
+  labs(
+    title = "Relative Airtime for Trump and Harris Across SNL and LWT",
+    subtitle = "Proportion of airtime when one of the candidates was mentioned",
+    x = "Episode Date",
+    y = "Percentage of Airtime"
+  ) +
+  theme_academic() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+# Print the combined stacked bar chart
+print(combined_stacked_bar_chart)
+
+# Save the combined stacked bar chart
+ggsave("combined_relative_airtime_cleaned.png", plot = combined_stacked_bar_chart, width = 12, height = 8, dpi = 300)
+```
+
+```{r}
+# Create the grouped bar chart
+grouped_bar_chart <- ggplot(combined_relative_airtime_long, aes(x = date, y = percentage, fill = candidate)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.8), color = "black") +
+  scale_fill_manual(values = c("Trump" = "red", "Harris" = "blue"), name = "Candidate") +
+  facet_wrap(~ show, ncol = 1, scales = "free_x") +  # Separate by show
+  geom_text(aes(label = paste0(round(percentage, 1), "%")), 
+            position = position_dodge(width = 0.8), vjust = -0.5, size = 3) +  # Add percentage labels
+  labs(
+    title = "Relative Airtime for Trump and Harris by Date",
+    subtitle = "Proportion of airtime when one of the candidates was mentioned",
+    x = "Date",
+    y = "Percentage of Airtime"
+  ) +
+  theme_academic() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    strip.text = element_text(face = "bold", size = 12)
+  )
+
+# Print the grouped bar chart
+print(grouped_bar_chart)
+
+# Save the grouped bar chart
+ggsave("grouped_relative_airtime_by_date.png", plot = grouped_bar_chart, width = 12, height = 8, dpi = 300)
+
 ```
