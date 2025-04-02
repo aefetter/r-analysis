@@ -147,16 +147,25 @@ snl_airtime_processed <- snl_airtime %>%
     total_trump_airtime_minutes = round(total_trump_airtime_seconds / 60, 2),
     total_harris_airtime_minutes = round(total_harris_airtime_seconds / 60, 2),
     
-    # Convert "run time (total)" from MM:SS to total seconds
+    # Correctly parse "run time (total)" from HH:MM:SS to total seconds
     episode_length_seconds = sapply(`run time (total)`, function(runtime) {
       time_parts <- unlist(strsplit(as.character(runtime), ":"))
-      as.numeric(time_parts[1]) * 60 + as.numeric(time_parts[2])
+      # Handle HH:MM:SS format
+      if (length(time_parts) == 3) {
+        as.numeric(time_parts[1]) * 3600 +  # Hours to seconds
+        as.numeric(time_parts[2]) * 60 +   # Minutes to seconds
+        as.numeric(time_parts[3])          # Seconds
+      } else if (length(time_parts) == 2) {
+        as.numeric(time_parts[1]) * 60 +   # Minutes to seconds
+        as.numeric(time_parts[2])          # Seconds
+      } else {
+        as.numeric(time_parts[1])          # Seconds only
+      }
     }),
     
     # Convert the date column to Date format
     date = as.Date(date, format = "%d-%b-%y")
   )
-
 # Rebuild all_segments for SNL
 all_segments <- data.frame(
   start = numeric(0),
@@ -283,7 +292,7 @@ for (page in 1:total_pages) {
 }
 ```
 
-### Topic analysis
+### Topic analysis for snl
 ```{r}
 #Now we're moving onto topic analysis, we need to clean the data first
 # Convert "run time (total)" from POSIXct to seconds and MM:SS, THIS IS BROKEN
@@ -1055,4 +1064,174 @@ print(grouped_bar_chart)
 # Save the grouped bar chart
 ggsave("grouped_relative_airtime_by_date.png", plot = grouped_bar_chart, width = 12, height = 8, dpi = 300)
 
+```
+
+cumulative airline visualizations
+```{r}
+# Combine all processed airtime dataframes into one
+combined_airtime <- bind_rows(
+  snl_airtime_processed %>%
+    select(date, total_trump_airtime_seconds, total_harris_airtime_seconds) %>%
+    mutate(show = "SNL"),
+  
+  tls_airtime_processed %>%
+    select(date, total_trump_airtime_seconds, total_harris_airtime_seconds) %>%
+    mutate(show = "TLS"),
+  
+  LWT_airtime_processed %>%
+    select(date, total_trump_airtime_seconds, total_harris_airtime_seconds) %>%
+    mutate(show = "LWT")
+)
+
+
+# Group by week and calculate total airtime for each candidate
+weekly_airtime <- combined_airtime %>%
+  mutate(week = floor_date(date, "week")) %>%  # Group by week
+  group_by(week, show) %>%
+  summarize(
+    total_trump_airtime_seconds = sum(total_trump_airtime_seconds, na.rm = TRUE),
+    total_harris_airtime_seconds = sum(total_harris_airtime_seconds, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Calculate percentage of airtime for Harris
+weekly_percentages <- weekly_airtime %>%
+  mutate(
+    total_candidate_airtime_seconds = total_trump_airtime_seconds + total_harris_airtime_seconds,
+    percent_harris = ifelse(total_candidate_airtime_seconds > 0,
+                            (total_harris_airtime_seconds / total_candidate_airtime_seconds) * 100,
+                            NA)
+  ) %>%
+  select(week, show, percent_harris)
+
+# Average percentages across shows
+average_weekly_percentages <- weekly_percentages %>%
+  group_by(week) %>%
+  summarize(avg_percent_harris = mean(percent_harris, na.rm = TRUE), .groups = "drop")
+
+library(ggplot2)
+
+# Create the horizontal bar plot
+airtime_by_week <- ggplot(average_weekly_percentages, aes(x = avg_percent_harris, y = fct_rev(as.factor(week)))) +
+  geom_bar(stat = "identity", fill = "blue", alpha = 0.8) +
+  geom_vline(xintercept = 50, linetype = "dashed", color = "red") +  # Add 50% reference line
+  scale_x_continuous(labels = scales::percent_format(scale = 1)) +  # Format x-axis as percentages
+  labs(
+    title = "Weekly Percentage of Airtime for Kamala Harris",
+    subtitle = "Averaged across SNL, LWT, and TLS",
+    x = "Percentage of Airtime for Harris",
+    y = "Week"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.y = element_text(size = 10),
+    axis.text.x = element_text(size = 10),
+    plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 12, hjust = 0.5)
+  )
+
+# Print the plot
+print(airtime_by_week)
+
+# Save the plot
+ggsave("percent_candidate_airtime_weekly.png", plot = airtime_by_week, width = 10, height = 8, dpi = 300)
+```
+
+```{r}
+
+# Combine all processed airtime dataframes into one
+combined_airtime <- bind_rows(
+  snl_airtime_processed %>%
+    select(date, total_trump_airtime_seconds, total_harris_airtime_seconds) %>%
+    mutate(show = "SNL"),
+  
+  tls_airtime_processed %>%
+    select(date, total_trump_airtime_seconds, total_harris_airtime_seconds) %>%
+    mutate(show = "TLS"),
+  
+  LWT_airtime_processed %>%
+    select(date, total_trump_airtime_seconds, total_harris_airtime_seconds) %>%
+    mutate(show = "LWT")
+)
+
+# Group by week and calculate total airtime for each candidate
+weekly_airtime <- combined_airtime %>%
+  mutate(week = floor_date(date, "week")) %>%  # Group by week
+  group_by(week, show) %>%
+  summarize(
+    total_trump_airtime_seconds = sum(total_trump_airtime_seconds, na.rm = TRUE),
+    total_harris_airtime_seconds = sum(total_harris_airtime_seconds, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Calculate percentage of airtime for each candidate
+weekly_percentages <- weekly_airtime %>%
+  mutate(
+    total_candidate_airtime_seconds = total_trump_airtime_seconds + total_harris_airtime_seconds,
+    percent_harris = ifelse(total_candidate_airtime_seconds > 0,
+                            (total_harris_airtime_seconds / total_candidate_airtime_seconds) * 100,
+                            NA),
+    percent_trump = 100 - percent_harris  # Remaining percentage for Trump
+  ) %>%
+  select(week, show, percent_harris, percent_trump)
+
+# Combine into one row per week with both candidate shares
+average_weekly_percentages <- weekly_percentages %>%
+  group_by(week) %>%
+  summarize(
+    avg_percent_harris = mean(percent_harris, na.rm = TRUE),
+    avg_percent_trump = mean(percent_trump, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  pivot_longer(
+    cols = c(avg_percent_harris, avg_percent_trump),
+    names_to = "candidate",
+    values_to = "percentage"
+  ) %>%
+  mutate(
+    candidate = recode(candidate, 
+                       "avg_percent_harris" = "Harris", 
+                       "avg_percent_trump" = "Trump")
+  )
+
+# Get the position of the election week factor on the Y-axis
+election_week <- as.Date("2024-11-05")
+election_week_floor <- floor_date(election_week, "week")
+
+# Convert weeks to factor in the same order used in the plot
+week_levels <- sort(unique(average_weekly_percentages$week), decreasing = TRUE)
+election_week_index <- which(week_levels == election_week_floor)
+
+# Now plot with a horizontal line at that Y-position
+airtime_by_week <- ggplot(average_weekly_percentages, aes(x = percentage, y = fct_rev(as.factor(week)), fill = candidate)) +
+  geom_col(position = "stack", alpha = 0.9) +
+  geom_hline(yintercept = election_week_index, linetype = "dashed", color = "black", size = 1) +  # Election Day line
+  annotate("text", x = 100, y = election_week_index, label = "Election Day", hjust = 0, vjust = -0.5, size = 4, color = "black") +
+  scale_x_continuous(labels = function(x) paste0(x, "%"), limits = c(0, 100)) +
+  labs(
+    title = "Weekly Distribution of Airtime Between Trump and Harris",
+    subtitle = "Averaged across SNL, TLS, and LWT",
+    x = "Share of Candidate Airtime",
+    y = "Week"
+  ) +
+  scale_fill_manual(values = c("Trump" = "red", "Harris" = "blue")) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.y = element_text(size = 10),
+    axis.text.x = element_text(size = 10),
+    plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 12, hjust = 0.5)
+  ) + coord_cartesian(clip = "off")
+
+
+# Print the plot
+print(airtime_by_week)
+
+ggsave(
+  filename = "weekly_airtime_distribution.png",
+  plot = airtime_by_week,
+  width = 12,
+  height = 8,
+  dpi = 300
+)
 ```
