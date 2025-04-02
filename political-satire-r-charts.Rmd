@@ -1060,3 +1060,220 @@ ggsave(
   dpi = 300
 )
 ```
+
+## Topic Visualizations
+
+```{r}
+# Combine all heatmap dataframes into one
+combined_topics <- bind_rows(
+  snl_heatmap_data %>%
+    select(show, economics, reproductive_rights, immigration) %>%
+    pivot_longer(cols = c(economics, reproductive_rights, immigration), names_to = "topic", values_to = "mentioned_by") %>%
+    mutate(show = "SNL"),
+  
+  tls_heatmap_data %>%
+    select(show, economics, reproductive_rights, immigration) %>%
+    pivot_longer(cols = c(economics, reproductive_rights, immigration), names_to = "topic", values_to = "mentioned_by") %>%
+    mutate(show = "TLS"),
+  
+  lwt_heatmap_data %>%
+    select(show, economics, reproductive_rights, immigration) %>%
+    pivot_longer(cols = c(economics, reproductive_rights, immigration), names_to = "topic", values_to = "mentioned_by") %>%
+    mutate(show = "LWT")
+)
+
+# Group by topic and candidate, and count mentions
+total_mentions <- combined_topics %>%
+  filter(mentioned_by != "None") %>%  # Exclude rows where no candidate was mentioned
+  group_by(topic, mentioned_by) %>%
+  summarize(total_mentions = n(), .groups = "drop")
+
+#to put "both" in the middle
+total_mentions <- total_mentions %>%
+  mutate(
+    mentioned_by = factor(mentioned_by, levels = c("Trump", "Both", "Harris"))
+  )
+
+# Create the stacked bar chart
+stacked_bar_chart <- ggplot(total_mentions, aes(x = topic, y = total_mentions, fill = mentioned_by)) +
+  geom_bar(stat = "identity", position = "stack", alpha = 0.9) +
+  scale_fill_manual(values = c("Trump" = "red", "Harris" = "blue", "Both" = "purple")) +
+  labs(
+    title = "Total Mentions of 2024 Election Topics by Candidate",
+    subtitle = "Aggregated across SNL, TLS, and LWT",
+    x = "Topic",
+    y = "Total Mentions",
+    fill = "Candidate"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 12, hjust = 0.5)
+  )
+
+# Print the chart
+print(stacked_bar_chart)
+
+# Save the chart
+ggsave("total_mentions_by_topic.png", plot = stacked_bar_chart, width = 12, height = 8, dpi = 300)
+```
+
+#trying out a grouped bar chart
+```{r}
+# Create a grouped bar chart
+grouped_bar_chart <- ggplot(total_mentions, aes(x = topic, y = total_mentions, fill = mentioned_by)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.8), alpha = 0.9) +
+  scale_fill_manual(values = c("Trump" = "red", "Harris" = "blue", "Both" = "purple")) +
+  labs(
+    title = "Mentions of 2024 Election Topics by Candidate",
+    subtitle = "Aggregated across SNL, TLS, and LWT",
+    x = "Topic",
+    y = "Total Mentions",
+    fill = "Candidate"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 12, hjust = 0.5)
+  )
+
+# Print the chart
+print(grouped_bar_chart)
+
+# Save the chart
+ggsave("grouped_mentions_by_topic.png", plot = grouped_bar_chart, width = 12, height = 8, dpi = 300)
+```
+
+
+```{r}
+#trying out proportional bar chart
+
+# Create the proportional bar chart
+proportional_bar_chart <- ggplot(total_mentions, aes(x = topic, y = total_mentions, fill = mentioned_by)) +
+  geom_bar(stat = "identity", position = "fill", alpha = 0.9) +
+  scale_fill_manual(values = c("Trump" = "red", "Both" = "purple", "Harris" = "blue")) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(
+    title = "Proportional Mentions of 2024 Election Topics by Candidate",
+    subtitle = "Aggregated across SNL, TLS, and LWT",
+    x = "Topic",
+    y = "Proportion of Mentions",
+    fill = "Candidate"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 12, hjust = 0.5)
+  )
+
+# Print the chart
+print(proportional_bar_chart)
+
+# Save the chart
+ggsave("proportional_mentions_by_topic_with_both_centered.png", plot = proportional_bar_chart, width = 12, height = 8, dpi = 300)
+```
+
+# Combine all heatmap dataframes into one, including the date column
+```{r}
+#these are for the date based topic visualizations
+# Ensure the `date` column is in Date format for all heatmap dataframes
+snl_heatmap_data <- snl_heatmap_data %>%
+  mutate(date = as.Date(date, format = "%Y-%m-%d"))  # Adjust the format if needed
+
+tls_heatmap_data <- tls_heatmap_data %>%
+  mutate(date = as.Date(date, format = "%Y-%m-%d"))  # Adjust the format if needed
+
+lwt_heatmap_data <- lwt_heatmap_data %>%
+  mutate(date = as.Date(date, format = "%Y-%m-%d"))  # Adjust the format if needed
+
+combined_topics_with_dates <- bind_rows(
+  snl_heatmap_data %>%
+    select(show, date, economics, reproductive_rights, immigration) %>%
+    pivot_longer(cols = c(economics, reproductive_rights, immigration), names_to = "topic", values_to = "mentioned_by") %>%
+    mutate(show = "SNL"),
+  
+  tls_heatmap_data %>%
+    select(show, date, economics, reproductive_rights, immigration) %>%
+    pivot_longer(cols = c(economics, reproductive_rights, immigration), names_to = "topic", values_to = "mentioned_by") %>%
+    mutate(show = "TLS"),
+  
+  lwt_heatmap_data %>%
+    select(show, date, economics, reproductive_rights, immigration) %>%
+    pivot_longer(cols = c(economics, reproductive_rights, immigration), names_to = "topic", values_to = "mentioned_by") %>%
+    mutate(show = "LWT")
+)
+
+# Filter out rows where no candidate was mentioned
+combined_topics_with_dates <- combined_topics_with_dates %>%
+  filter(mentioned_by != "None")
+
+# Group by date, topic, and candidate, and count mentions
+mentions_over_time <- combined_topics_with_dates %>%
+  group_by(date, topic, mentioned_by) %>%
+  summarize(total_mentions = n(), .groups = "drop")
+```
+
+# stacked area chart, cumulative over time
+```{r}
+# Step 1: Adjust the data to handle "Both" by duplicating rows
+mentions_adjusted <- mentions_over_time %>%
+  mutate(mentioned_by = ifelse(mentioned_by == "Both", "Trump", mentioned_by)) %>%
+  bind_rows(
+    mentions_over_time %>%
+      filter(mentioned_by == "Both") %>%
+      mutate(mentioned_by = "Harris")
+  )
+
+# Step 2: Group by date, topic, and candidate, and recalculate total mentions
+mentions_adjusted <- mentions_adjusted %>%
+  group_by(date, topic, mentioned_by) %>%
+  summarize(total_mentions = sum(total_mentions), .groups = "drop")
+
+# Step 3: Expand the data to include all dates for each topic and candidate
+all_dates <- seq(min(mentions_adjusted$date), max(mentions_adjusted$date), by = "day")
+mentions_expanded <- mentions_adjusted %>%
+  group_by(topic, mentioned_by) %>%
+  complete(date = all_dates, fill = list(total_mentions = 0)) %>%  # Fill missing dates with 0 mentions
+  arrange(date) %>%
+  ungroup()
+
+# Step 4: Calculate cumulative mentions for each candidate over time
+mentions_cumulative <- mentions_expanded %>%
+  group_by(topic, mentioned_by) %>%
+  mutate(cumulative_mentions = cumsum(total_mentions)) %>%
+  ungroup()
+
+# Step 5: Reorder the `mentioned_by` factor to bring Harris (blue) to the front
+mentions_cumulative <- mentions_cumulative %>%
+  mutate(mentioned_by = factor(mentioned_by, levels = c("Trump", "Harris")))
+
+# Step 6: Create the cumulative area chart
+cumulative_area_chart <- ggplot(mentions_cumulative, aes(x = date, y = cumulative_mentions, fill = mentioned_by)) +
+  geom_area(alpha = 0.7, position = "identity") +  # Use position = "identity" for overlapping areas
+  facet_wrap(~ topic, ncol = 1) +
+  scale_fill_manual(values = c("Trump" = "red", "Harris" = "blue")) +  # Red and blue will blend into purple
+  labs(
+    title = "Cumulative Mentions of Election Topics Over Time",
+    subtitle = "Overlapping Areas Highlight Shared Mentions Across SNL, TLS, and LWT",
+    x = "Date",
+    y = "Cumulative Mentions",
+    fill = "Candidate"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(face = "bold", size = 16),
+    strip.text.x = element_text(face = "bold", size = 12),
+    panel.background = element_rect(fill = "white", color = NA),  # White background
+    plot.background = element_rect(fill = "white", color = NA)   # White background for the entire plot
+  )
+
+# Step 7: Print the chart
+print(cumulative_area_chart)
+
+# Step 8: Save the chart
+ggsave("cumulative_mentions_over_time.png", plot = cumulative_area_chart, width = 12, height = 8, dpi = 300)
+```
