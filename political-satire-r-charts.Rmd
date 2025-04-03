@@ -16,6 +16,7 @@ library(readr)
 library(readxl)
 library(patchwork)
 library(ggforce)
+library(hms)
 ```
 
 ### Step 1. Read in the data
@@ -34,8 +35,8 @@ theme_academic <- function(base_size = 14, base_family = "") {
       axis.ticks.y = element_blank(),
       panel.grid.major.y = element_blank(),
       panel.grid.minor.y = element_blank(),
-      panel.grid.major.x = element_line(color = "grey80", size = 0.3),
-      panel.grid.minor.x = element_line(color = "grey90", size = 0.2),
+      panel.grid.major.x = element_line(color = "grey80", linewidth = 0.3),
+      panel.grid.minor.x = element_line(color = "grey90", linewidth = 0.2),
       plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
       plot.subtitle = element_text(size = 12, hjust = 0.5),
       axis.text.x = element_text(size = 10, color = "black"),
@@ -79,15 +80,33 @@ calculate_duration <- function(time_range) {
   for (range in ranges) {
     # Split start and end times
     times <- unlist(strsplit(range, "-"))
-    if (length(times) != 2) next
+    if (length(times) != 2) next  # Skip invalid ranges
     
     # Convert start time to seconds
     start_parts <- as.numeric(unlist(strsplit(times[1], ":")))
-    start_seconds <- if (length(start_parts) == 2) start_parts[1] * 60 + start_parts[2] else start_parts[1]
+    start_seconds <- if (length(start_parts) == 3) {
+      start_parts[1] * 3600 + start_parts[2] * 60 + start_parts[3]  # HH:MM:SS
+    } else if (length(start_parts) == 2) {
+      start_parts[1] * 60 + start_parts[2]  # MM:SS
+    } else {
+      start_parts[1]  # Seconds only
+    }
     
     # Convert end time to seconds
     end_parts <- as.numeric(unlist(strsplit(times[2], ":")))
-    end_seconds <- if (length(end_parts) == 2) end_parts[1] * 60 + end_parts[2] else end_parts[1]
+    end_seconds <- if (length(end_parts) == 3) {
+      end_parts[1] * 3600 + end_parts[2] * 60 + end_parts[3]  # HH:MM:SS
+    } else if (length(end_parts) == 2) {
+      end_parts[1] * 60 + end_parts[2]  # MM:SS
+    } else {
+      end_parts[1]  # Seconds only
+    }
+    
+    # Check for valid start and end times
+    if (is.na(start_seconds) || is.na(end_seconds) || start_seconds > end_seconds) {
+      warning(paste("Invalid time range:", range))
+      next  # Skip invalid ranges
+    }
     
     # Add duration to total
     total_seconds <- total_seconds + (end_seconds - start_seconds)
@@ -846,7 +865,7 @@ for (page in 1:total_pages) {
       fill = "blue", alpha = 0.8
     ) +
     
-    # Add tick marks for every minute and every 15 seconds
+    # Add0. tick marks for every mi0.nute and every 15 seconds
     scale_x_continuous(
       breaks = seq(0, max(episode_bars_tls$episode_length_seconds, na.rm = TRUE), by = 60),  # Tick marks every minute
       minor_breaks = seq(0, max(episode_bars_tls$episode_length_seconds, na.rm = TRUE), by = 15),  # Minor tick marks every 15 seconds
@@ -961,7 +980,294 @@ ggsave("tls_heatmap_topics.png", plot = tls_heatmap_plot, width = 12, height = 6
 
 
 
-#Cumulative airtime visualization 
+# Visualizations for The Daily Show
+```{r}
+# read in data, WILL NEED TO CHANGE THIS DATA ONCE EMMA FINISHES PAST ELECTION DAY
+tds_airtime_election <- read_excel("data/tds-airtime-election.xlsx")
+tds_topics_election <- read_excel("data/tds-topics-election.xlsx")
+
+tds_airtime_election$`run time (total)` <- as_hms(tds_airtime_election$`run time (total)`)
+
+tds_airtime_election <- tds_airtime_election %>% 
+  arrange(date)
+```
+
+```{r}
+#huh, there's a mismatch of 1 entry, let's find it
+# Compare show names between the two datasets
+tds_airtime_shows <- unique(tds_airtime_election$show)
+tds_topics_shows <- unique(tds_topics_election$show)
+
+# Find shows in airtime but not in topics
+shows_only_in_airtime <- setdiff(tds_airtime_shows, tds_topics_shows)
+
+# Find shows in topics but not in airtime
+shows_only_in_topics <- setdiff(tds_topics_shows, tds_airtime_shows)
+
+# Print the results
+cat("Shows only in airtime dataset:", shows_only_in_airtime, "\n")
+cat("Shows only in topics dataset:", shows_only_in_topics, "\n")
+
+# Compare by dates as well (in case show names match but dates differ)
+tds_airtime_dates <- unique(tds_airtime_election$date)
+tds_topics_dates <- unique(tds_topics_election$date)
+
+# Find dates in airtime but not in topics
+dates_only_in_airtime <- setdiff(tds_airtime_dates, tds_topics_dates)
+
+# Find dates in topics but not in airtime
+dates_only_in_topics <- setdiff(tds_topics_dates, tds_airtime_dates)
+
+cat("Dates only in airtime dataset:", dates_only_in_airtime, "\n")
+cat("Dates only in topics dataset:", dates_only_in_topics, "\n")
+```
+#airtime visualization for TDS
+```{r}
+# Step 1: Process the TDS airtime data
+tds_airtime_processed <- tds_airtime_election %>%
+  mutate(
+    # Calculate total airtime in seconds for Trump and Harris
+    total_trump_airtime_seconds = sapply(`trump air time stamps`, calculate_duration),
+    total_harris_airtime_seconds = sapply(`harris air time stamps`, calculate_duration),
+    
+    # Convert airtime to minutes for easier interpretation
+    total_trump_airtime_minutes = round(total_trump_airtime_seconds / 60, 2),
+    total_harris_airtime_minutes = round(total_harris_airtime_seconds / 60, 2),
+    
+    # Correctly parse "run time (total)" from HH:MM:SS to total seconds
+    episode_length_seconds = sapply(`run time (total)`, function(runtime) {
+      time_parts <- unlist(strsplit(as.character(runtime), ":"))
+      # Handle HH:MM:SS format
+      if (length(time_parts) == 3) {
+        as.numeric(time_parts[1]) * 3600 +  # Hours to seconds
+        as.numeric(time_parts[2]) * 60 +    # Minutes to seconds
+        as.numeric(time_parts[3])           # Seconds
+      } else if (length(time_parts) == 2) {
+        as.numeric(time_parts[1]) * 60 +    # Minutes to seconds
+        as.numeric(time_parts[2])           # Seconds
+      } else {
+        as.numeric(time_parts[1])           # Seconds only
+      }
+    }),
+    
+    # Convert the date column to Date format (adjust format if needed)
+    date = as.Date(date, format = "%d-%b-%y")
+  )
+
+# Step 2: Create segments for visualization
+all_segments_tds <- data.frame(
+  start = numeric(0),
+  end = numeric(0), 
+  candidate = character(0),
+  episode = character(0),
+  stringsAsFactors = FALSE
+)
+
+# Loop through all episodes in tds_airtime_processed
+for (i in 1:nrow(tds_airtime_processed)) {
+  episode <- tds_airtime_processed[i, ]
+  episode_title <- paste0(
+    episode$show,
+    " (", format(episode$date, "%b %d, %Y"), ")"
+  )
+  
+  # Process Trump and Harris airtime
+  trump_segments <- process_timestamps(episode$`trump air time stamps`, "Trump")
+  harris_segments <- process_timestamps(episode$`harris air time stamps`, "Harris")
+  
+  # Add episode title to each segment
+  if (nrow(trump_segments) > 0) {
+    trump_segments$episode <- episode_title
+    all_segments_tds <- rbind(all_segments_tds, trump_segments)
+  }
+  
+  if (nrow(harris_segments) > 0) {
+    harris_segments$episode <- episode_title
+    all_segments_tds <- rbind(all_segments_tds, harris_segments)
+  }
+}
+
+# Step 3: Create episode bars dataframe with episode index
+episode_bars_tds <- tds_airtime_processed %>%
+  arrange(date) %>%
+  mutate(
+    episode = paste0(
+      show,
+      " (", format(date, "%b %d, %Y"), ")"
+    ),
+    episode_index = row_number()
+  ) %>%
+  select(episode, episode_length_seconds, date, episode_index)
+
+# Clean up the episode column
+#episode_bars_tds <- episode_bars_tds %>%
+  #mutate(
+    #episode = gsub("\"", "'", episode),
+    #episode = gsub("'", "'", episode),
+    #episode = gsub(""|"", "'", episode),
+    #episode = str_trim(episode)
+  #)
+
+# Add the episode index to all_segments_tds
+all_segments_tds <- all_segments_tds %>%
+  left_join(
+    episode_bars_tds %>% select(episode, episode_index),
+    by = "episode"
+  )
+
+# Step 4: Create the faceted visualization with pagination
+total_pages <- ceiling(nrow(episode_bars_tds) / 12)  # 12 episodes per page
+
+for (page in 1:total_pages) {
+  # Calculate which episode indices belong on this page
+  page_indices <- ((page-1) * 12 + 1):(min(page * 12, nrow(episode_bars_tds)))
+  
+  # Filter data for this page
+  page_bars <- episode_bars_tds %>% filter(episode_index %in% page_indices)
+  page_segments <- all_segments_tds %>% filter(episode_index %in% page_indices)
+  
+  # Generate the visualization for the current page
+  paginated_vis <- ggplot() +
+    # Draw the full episode bar (grey) for all episodes
+    geom_rect(
+      data = page_bars,
+      aes(xmin = 0, xmax = episode_length_seconds, ymin = 0, ymax = 1, group = episode),
+      fill = "grey90", color = "black", linewidth = 0.3
+    ) +
+    
+    # Add Trump segments
+    geom_rect(
+      data = filter(page_segments, candidate == "Trump"),
+      aes(xmin = start, xmax = end, ymin = 0.5, ymax = 1, group = episode),
+      fill = "red", alpha = 0.8
+    ) +
+    
+    # Add Harris segments
+    geom_rect(
+      data = filter(page_segments, candidate == "Harris"),
+      aes(xmin = start, xmax = end, ymin = 0, ymax = 0.5, group = episode),
+      fill = "blue", alpha = 0.8
+    ) +
+    
+    # Add tick marks for every minute and every 15 seconds
+    scale_x_continuous(
+      breaks = seq(0, max(page_bars$episode_length_seconds, na.rm = TRUE), by = 120),  # Tick marks every 2 minutes
+      minor_breaks = seq(0, max(page_bars$episode_length_seconds, na.rm = TRUE), by = 60),  # Minor tick marks every minute
+      labels = function(x) sprintf("%d:%02d", x %/% 60, x %% 60)  # Format as mm:ss
+    ) +
+    
+    # Facet by episode, ordered by the original data order
+    facet_wrap(~ reorder(episode, episode_index), ncol = 1, scales = "free_x") +
+    
+    # Add labels and theme
+    labs(
+      title = paste0("The Daily Show Airtime by Candidate (Page ", page, ")"),
+      subtitle = "Red: Trump Airtime | Blue: Harris Airtime",
+      x = "Time (minutes:seconds)",
+      y = NULL
+    ) +
+    theme_academic()
+  
+  # Save the current page
+  save_academic_chart(paginated_vis, paste0("tds_airtime_faceted_page", page, ".pdf"), width = 8.5, height = 11)
+}
+```
+# Topic Visualization for TDS (up through election day)
+```{r}
+# Step 1: Process the TDS topics data
+tds_topics_processed <- tds_topics_election %>%
+  mutate(across(
+    contains(c("reproductive", "immigration", "economics")),
+    ~ case_when(
+        str_detect(., regex("No (mention|statements|direct|specific)", ignore_case = TRUE)) ~ FALSE,
+        is.na(.) ~ NA,
+        TRUE ~ TRUE
+      ),
+    .names = "mentioned_{.col}"
+  ))
+
+# Step 2: Create the heatmap dataset
+tds_heatmap_data <- tds_topics_processed %>%
+  mutate(
+    economics = case_when(
+      `mentioned_Trump Economics` == TRUE & `mentioned_Harris Economics` == FALSE ~ "Trump",
+      `mentioned_Trump Economics` == FALSE & `mentioned_Harris Economics` == TRUE ~ "Harris",
+      `mentioned_Trump Economics` == TRUE & `mentioned_Harris Economics` == TRUE ~ "Both",
+      TRUE ~ "None"  # Default case when neither is TRUE
+    ),
+    reproductive_rights = case_when(
+      `mentioned_Trump reproductive rights` == TRUE & `mentioned_Harris reproductive rights` == FALSE ~ "Trump",
+      `mentioned_Trump reproductive rights` == FALSE & `mentioned_Harris reproductive rights` == TRUE ~ "Harris",
+      `mentioned_Trump reproductive rights` == TRUE & `mentioned_Harris reproductive rights` == TRUE ~ "Both",
+      TRUE ~ "None"
+    ),
+    immigration = case_when(
+      `mentioned_Trump immigration` == TRUE & `mentioned_Harris immigration` == FALSE ~ "Trump",
+      `mentioned_Trump immigration` == FALSE & `mentioned_Harris immigration` == TRUE ~ "Harris",
+      `mentioned_Trump immigration` == TRUE & `mentioned_Harris immigration` == TRUE ~ "Both",
+      TRUE ~ "None"
+    )
+  ) %>%
+  select(show, date, economics, reproductive_rights, immigration)
+
+# Ensure the `date` column is in the correct format
+tds_heatmap_data <- tds_heatmap_data %>%
+  mutate(date = as.Date(date, format = "%Y-%m-%d"))
+
+# Step 3: Prepare the data for plotting
+tds_heatmap_data <- tds_heatmap_data %>%
+  arrange(date) %>%
+  mutate(
+    ep_num = row_number(),  # Create episode numbers
+    ep_label = paste0(ep_num, " (", format(date, "%b %d"), ")")  # Create episode labels
+  )
+
+# Pivot to long format
+tds_heatmap_long <- tds_heatmap_data %>%
+  pivot_longer(
+    cols = c(economics, reproductive_rights, immigration),
+    names_to = "topic",
+    values_to = "mentioned_by"
+  )
+
+# Step 4: Create the heatmap
+mention_colors <- c(
+  "Trump" = "red",
+  "Harris" = "blue",
+  "Both" = "purple",
+  "None" = "grey90"
+)
+
+tds_heatmap_plot <- ggplot(tds_heatmap_long, 
+                          aes(x = factor(ep_label, levels = unique(tds_heatmap_data$ep_label)), 
+                              y = fct_rev(topic), fill = mentioned_by)) +
+  geom_tile(color = "white", linewidth = 0.5) +
+  scale_fill_manual(values = mention_colors, name = "Mentioned By") +
+  labs(
+    title = "The Daily Show Mentions by Topic and Candidate",
+    x = "Segment Number (Air Date)",
+    y = "Topic"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.text.y = element_text(size = 10, color = "black"),
+    panel.grid = element_blank(),
+    plot.background = element_rect(fill = "white", color = NA)
+  ) +
+  geom_vline(
+    xintercept = which(tds_heatmap_data$date == as.Date("2024-11-05")),
+    linetype = "dashed", color = "black"
+  )
+
+# Print the heatmap
+print(tds_heatmap_plot)
+
+# Save the heatmap
+ggsave("tds_heatmap_topics.png", plot = tds_heatmap_plot, width = 12, height = 6, dpi = 300)
+```
+
+#Cumulative airtime visualization (excluding TDS rn) 
 ```{r}
 
 # Combine all processed airtime dataframes into one
@@ -1061,7 +1367,7 @@ ggsave(
 )
 ```
 
-## Topic Visualizations
+## Topic Visualizations (excluding TDS rn)
 
 ```{r}
 # Combine all heatmap dataframes into one
@@ -1276,4 +1582,497 @@ print(cumulative_area_chart)
 
 # Step 8: Save the chart
 ggsave("cumulative_mentions_over_time.png", plot = cumulative_area_chart, width = 12, height = 8, dpi = 300)
+```
+
+#visualization that combines airtime with discussion of important topics overtime
+```{r}
+# Step 1: Prepare the cumulative mentions data for all topics
+mentions_cumulative_all_topics <- mentions_cumulative %>%
+  group_by(date, mentioned_by) %>%
+  summarize(cumulative_mentions = sum(cumulative_mentions), .groups = "drop")
+
+# Step 2: Prepare the cumulative airtime data
+airtime_cumulative <- combined_airtime %>%
+  group_by(date) %>%
+  summarize(
+    trump_airtime = cumsum(total_trump_airtime_seconds),
+    harris_airtime = cumsum(total_harris_airtime_seconds),
+    .groups = "drop"
+  ) %>%
+  pivot_longer(
+    cols = c(trump_airtime, harris_airtime),
+    names_to = "mentioned_by",
+    values_to = "cumulative_airtime"
+  ) %>%
+  mutate(
+    mentioned_by = recode(mentioned_by, 
+                          "trump_airtime" = "Trump", 
+                          "harris_airtime" = "Harris")
+  )
+
+# Step 3: Combine mentions and airtime data
+combined_cumulative <- mentions_cumulative_all_topics %>%
+  left_join(
+    airtime_cumulative,
+    by = c("date", "mentioned_by")
+  ) %>%
+  pivot_longer(
+    cols = c(cumulative_mentions, cumulative_airtime),
+    names_to = "metric",
+    values_to = "value"
+  )
+```
+
+
+```{r}
+# Step 1: Prepare cumulative airtime data
+airtime_cumulative <- combined_airtime %>%
+  arrange(date) %>%
+  group_by(date) %>%
+  summarize(
+    trump_airtime_cumulative = sum(total_trump_airtime_seconds, na.rm = TRUE),
+    harris_airtime_cumulative = sum(total_harris_airtime_seconds, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  # Get cumulative sums across all dates
+  mutate(
+    trump_airtime_cumulative = cumsum(trump_airtime_cumulative),
+    harris_airtime_cumulative = cumsum(harris_airtime_cumulative)
+  )
+
+# Step 2: Prepare cumulative mentions data (aggregated across all topics)
+mentions_cumulative_all_topics <- mentions_cumulative %>%
+  group_by(date, mentioned_by) %>%
+  summarize(cumulative_mentions = sum(cumulative_mentions), .groups = "drop")
+
+# Step 3: Combine datasets for plotting
+combined_data <- airtime_cumulative %>%
+  left_join(
+    mentions_cumulative_all_topics %>%
+      pivot_wider(
+        names_from = mentioned_by,
+        values_from = cumulative_mentions,
+        names_prefix = "mentions_"
+      ),
+    by = "date"
+  )
+
+```
+
+
+```{r}
+# Step 4: Plot
+ggplot(combined_data, aes(x = date)) +
+  # Cumulative Airtime
+  geom_line(aes(y = trump_airtime_cumulative, color = "Trump Airtime"), linewidth = 1.3) +
+  geom_line(aes(y = harris_airtime_cumulative, color = "Harris Airtime"), linewidth = 1.3) +
+
+  # Cumulative Mentions (rescaled)
+  geom_line(aes(y = mentions_Trump * 60, color = "Trump Mentions"), linetype = "dashed", linewidth = 1.1) +
+  geom_line(aes(y = mentions_Harris * 60, color = "Harris Mentions"), linetype = "dashed", linewidth = 1.1) +
+
+  # Election Day reference line
+  geom_vline(xintercept = as.Date("2024-11-05"), linetype = "dotted", color = "black", linewidth = 0.8) +
+  annotate("text", x = as.Date("2024-11-05"), y = max(combined_data$trump_airtime_cumulative, na.rm = TRUE) * 0.95,
+           label = "Election Day", angle = 90, vjust = -0.5, size = 4) +
+
+  # Axis + color scales
+  scale_y_continuous(
+    name = "Cumulative Airtime (seconds)",
+    sec.axis = sec_axis(~./60, name = "Cumulative Topic Mentions")
+  ) +
+  scale_color_manual(
+    name = NULL,
+    values = c(
+      "Trump Airtime" = "#B22222", 
+      "Harris Airtime" = "#1E3A8A",
+      "Trump Mentions" = "#FA8072", 
+      "Harris Mentions" = "#6495ED"
+    )
+  ) +
+
+  # Labels + theme
+  labs(
+    title = "Candidate Airtime vs. Topic Mentions Over Time",
+    subtitle = "Solid lines = Airtime (left axis) · Dashed lines = Topic Mentions (right axis)",
+    x = "Date"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "top",
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(face = "bold", size = 18, hjust = 0.5),
+    plot.subtitle = element_text(size = 13, hjust = 0.5),
+    panel.grid.minor = element_blank(),
+    panel.background = element_rect(fill = "white", color = NA),
+    plot.background = element_rect(fill = "white", color = NA)
+  )
+
+# Save the plot
+ggsave("airtime_vs_mentions_over_time_pretty.png", width = 12, height = 8, dpi = 300)
+
+```
+
+
+#stacked area vs frequency chart
+```{r}
+# Create the stacked area chart
+ggplot(combined_data, aes(x = date)) +
+  # Stacked area for cumulative airtime
+  geom_area(aes(y = trump_airtime_cumulative, fill = "Trump Airtime"), position = "stack", alpha = 0.3) +
+  geom_area(aes(y = harris_airtime_cumulative, fill = "Harris Airtime"), position = "stack", alpha = 0.3) +
+  
+  # Dashed lines for cumulative mentions (scaled for visual comparison)
+  geom_line(aes(y = mentions_Trump * 60, color = "Trump Mentions"), 
+            linetype = "dashed", linewidth = 1.2) +
+  geom_line(aes(y = mentions_Harris * 60, color = "Harris Mentions"), 
+            linetype = "dashed", linewidth = 1.2) +
+  
+  # Election Day marker
+  geom_vline(xintercept = as.Date("2024-11-05"), 
+             linetype = "longdash", color = "black", linewidth = 0.7) +
+  annotate("text", x = as.Date("2024-11-05"), 
+           y = max(combined_data$trump_airtime_cumulative + combined_data$harris_airtime_cumulative, na.rm = TRUE) * 0.9,
+           label = "Election Day", angle = 90, hjust = -0.2, size = 4) +
+  
+  # Color scales
+  scale_fill_manual(
+    name = "Airtime (Area)",
+    values = c("Trump Airtime" = "red", "Harris Airtime" = "blue")
+  ) +
+  scale_color_manual(
+    name = "Mentions (Line)",
+    values = c("Trump Mentions" = "darkred", "Harris Mentions" = "darkblue")
+  ) +
+  
+  # Y-axis with secondary axis for mentions
+  scale_y_continuous(
+    name = "Cumulative Airtime (seconds)",
+    sec.axis = sec_axis(~./60, name = "Cumulative Topic Mentions")
+  ) +
+  
+  # Labels and styling
+  labs(
+    title = "Stacked Cumulative Airtime vs. Topic Mentions Over Time",
+    subtitle = "Stacked areas show total airtime; dashed lines show topic mentions",
+    x = "Date"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "top",
+    legend.box = "vertical",
+    panel.grid.minor = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 12, hjust = 0.5),
+    panel.background = element_rect(fill = "white", color = NA),
+    plot.background = element_rect(fill = "white", color = NA)
+  )
+
+# Save the plot
+ggsave("stacked_cumulative_airtime_mentions_timeline.png", width = 12, height = 8, dpi = 300)
+```
+
+### Cumulative charts through election day with ALL 4 SHOWS
+
+#AIRTIME VISUALIZATION UP UNTIL ELECTION DAY
+
+```{r}
+# Combine all processed airtime dataframes into one
+election_combined_airtime <- bind_rows(
+  snl_airtime_processed %>%
+    select(date, total_trump_airtime_seconds, total_harris_airtime_seconds) %>%
+    mutate(show = "SNL"),
+  
+  tls_airtime_processed %>%
+    select(date, total_trump_airtime_seconds, total_harris_airtime_seconds) %>%
+    mutate(show = "TLS"),
+  
+  LWT_airtime_processed %>%
+    select(date, total_trump_airtime_seconds, total_harris_airtime_seconds) %>%
+    mutate(show = "LWT"),
+  tds_airtime_processed %>%
+    select(date, total_trump_airtime_seconds, total_harris_airtime_seconds) %>%
+    mutate(show = "TDS")
+)
+
+# Define the election date
+election_date <- as.Date("2024-11-05")
+election_week <- as.Date("2024-11-05")
+election_week_floor <- floor_date(election_week, "week")
+
+election_combined_airtime <- election_combined_airtime %>%
+  filter(date <= election_date)
+
+# Group by week and calculate total airtime for each candidate
+election_weekly_airtime <- election_combined_airtime %>%
+  mutate(week = floor_date(date, "week")) %>%  # Group by week
+  group_by(week, show) %>%
+  summarize(
+    total_trump_airtime_seconds = sum(total_trump_airtime_seconds, na.rm = TRUE),
+    total_harris_airtime_seconds = sum(total_harris_airtime_seconds, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Calculate percentage of airtime for each candidate
+election_weekly_percentages <- election_weekly_airtime %>%
+  mutate(
+    total_candidate_airtime_seconds = total_trump_airtime_seconds + total_harris_airtime_seconds,
+    percent_harris = ifelse(total_candidate_airtime_seconds > 0,
+                            (total_harris_airtime_seconds / total_candidate_airtime_seconds) * 100,
+                            NA),
+    percent_trump = 100 - percent_harris  # Remaining percentage for Trump
+  ) %>%
+  select(week, show, percent_harris, percent_trump)
+
+# Combine into one row per week with both candidate shares
+election_average_weekly_percentages <- election_weekly_percentages %>%
+  group_by(week) %>%
+  summarize(
+    avg_percent_harris = mean(percent_harris, na.rm = TRUE),
+    avg_percent_trump = mean(percent_trump, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  pivot_longer(
+    cols = c(avg_percent_harris, avg_percent_trump),
+    names_to = "candidate",
+    values_to = "percentage"
+  ) %>%
+  mutate(
+    candidate = recode(candidate, 
+                       "avg_percent_harris" = "Harris", 
+                       "avg_percent_trump" = "Trump")
+  )
+
+
+# Convert weeks to factor in the same order used in the plot
+week_levels <- sort(unique(election_average_weekly_percentages$week), decreasing = TRUE)
+election_week_index <- which(week_levels == election_week_floor)
+
+# Now plot with a horizontal line at that Y-position
+election_airtime_by_week <- ggplot(election_average_weekly_percentages, aes(x = percentage, y = fct_rev(as.factor(week)), fill = candidate)) +
+  geom_col(position = "stack", alpha = 0.9) +
+  geom_hline(yintercept = election_week_index, linetype = "dashed", color = "black", size = 1) +  # Election Day line
+  annotate("text", x = 100, y = election_week_index, label = "Election Day", hjust = 0, vjust = -0.5, size = 4, color = "black") +
+  scale_x_continuous(labels = function(x) paste0(x, "%"), limits = c(0, 100)) +
+  labs(
+    title = "Weekly Distribution of Airtime Between Trump and Harris before the 2024 Election",
+    subtitle = "Averaged across Saturday Night Live, The Late Show, Last Week Tonight, and The Daily Show",
+    x = "Share of Candidate Airtime",
+    y = "Week"
+  ) +
+  scale_fill_manual(values = c("Trump" = "red", "Harris" = "blue")) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.y = element_text(size = 10),
+    axis.text.x = element_text(size = 10),
+    plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 12, hjust = 0.5)
+  ) + coord_cartesian(clip = "off")
+
+
+# Print the plot
+print(election_airtime_by_week)
+
+ggsave(
+  filename = "election_weekly_airtime_distribution.png",
+  plot = election_airtime_by_week,
+  width = 12,
+  height = 8,
+  dpi = 300
+)
+
+```
+
+# TO CONTINUE, topic visualizations
+```{r}
+#topic visualization
+tds_heatmap_data <- tds_heatmap_data %>%
+  mutate(date = as.Date(date, format = "%Y-%m-%d"))  # Adjust the format if needed
+
+election_combined_topics <- bind_rows(
+  snl_heatmap_data %>%
+    select(show, date, economics, reproductive_rights, immigration) %>%
+    pivot_longer(cols = c(economics, reproductive_rights, immigration), names_to = "topic", values_to = "mentioned_by") %>%
+    mutate(show = "SNL"),
+  
+  tls_heatmap_data %>%
+    select(show, date, economics, reproductive_rights, immigration) %>%
+    pivot_longer(cols = c(economics, reproductive_rights, immigration), names_to = "topic", values_to = "mentioned_by") %>%
+    mutate(show = "TLS"),
+  
+  lwt_heatmap_data %>%
+    select(show, date, economics, reproductive_rights, immigration) %>%
+    pivot_longer(cols = c(economics, reproductive_rights, immigration), names_to = "topic", values_to = "mentioned_by") %>%
+    mutate(show = "LWT"),
+  
+  tds_heatmap_data %>% 
+    select(show, date, economics, reproductive_rights, immigration) %>%
+    pivot_longer(cols = c(economics, reproductive_rights, immigration), names_to = "topic", values_to = "mentioned_by") %>%
+    mutate(show = "TDS"),
+)
+
+# Filter out rows where no candidate was mentioned
+election_combined_topics <- election_combined_topics %>%
+  filter(mentioned_by != "None")
+
+# Group by date, topic, and candidate, and count mentions
+election_mentions_over_time <- election_combined_topics %>%
+  group_by(date, topic, mentioned_by) %>%
+  summarize(total_mentions = n(), .groups = "drop")
+
+# Step 1: Filter data to include only dates up to the election date
+election_mentions_over_time <- election_combined_topics %>%
+  filter(date <= election_date) %>%  # Filter for dates up to the election
+  group_by(date, topic, mentioned_by) %>%
+  summarize(total_mentions = n(), .groups = "drop")
+
+# Step 2: Adjust the data to handle "Both" by duplicating rows
+election_mentions_adjusted <- election_mentions_over_time %>%
+  mutate(mentioned_by = ifelse(mentioned_by == "Both", "Trump", mentioned_by)) %>%
+  bind_rows(
+    election_mentions_over_time %>%
+      filter(mentioned_by == "Both") %>%
+      mutate(mentioned_by = "Harris")
+  )
+
+# Step 3: Group by date, topic, and candidate, and recalculate total mentions
+election_mentions_adjusted <- election_mentions_adjusted %>%
+  group_by(date, topic, mentioned_by) %>%
+  summarize(total_mentions = sum(total_mentions), .groups = "drop")
+
+# Step 4: Expand the data to include all dates for each topic and candidate
+all_dates <- seq(min(election_mentions_adjusted$date), election_date, by = "day")  # Ensure cutoff at election date
+mentions_expanded <- election_mentions_adjusted %>%
+  group_by(topic, mentioned_by) %>%
+  complete(date = all_dates, fill = list(total_mentions = 0)) %>%  # Fill missing dates with 0 mentions
+  arrange(date) %>%
+  ungroup()
+
+# Step 5: Calculate cumulative mentions for each candidate over time
+election_mentions_cumulative <- mentions_expanded %>%
+  group_by(topic, mentioned_by) %>%
+  mutate(cumulative_mentions = cumsum(total_mentions)) %>%
+  ungroup()
+
+# Step 6: Reorder the `mentioned_by` factor to bring Harris (blue) to the front
+election_mentions_cumulative <- election_mentions_cumulative %>%
+  mutate(mentioned_by = factor(mentioned_by, levels = c("Trump", "Harris")))
+
+# Step 7: Create the cumulative area chart
+election_cumulative_area_chart <- ggplot(election_mentions_cumulative, aes(x = date, y = cumulative_mentions, fill = mentioned_by)) +
+  geom_area(alpha = 0.7, position = "identity") +  # Use position = "identity" for overlapping areas
+  facet_wrap(~ topic, ncol = 1) +
+  scale_fill_manual(values = c("Trump" = "red", "Harris" = "blue")) +  # Red and blue will blend into purple
+  labs(
+    title = "Cumulative Mentions of Election Topics Over Time",
+    subtitle = str_wrap("Overlapping Areas Highlight Shared Mentions Across Saturday Night Live, The Late Show, Last Week Tonight, and The Daily Show", width = 60),
+    x = "Date",
+    y = "Cumulative Mentions",
+    fill = "Candidate"
+)+
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(face = "bold", size = 16),
+    strip.text.x = element_text(face = "bold", size = 12),
+    panel.background = element_rect(fill = "white", color = NA),  # White background
+    plot.background = element_rect(fill = "white", color = NA)
+  )
+
+# Step 8: Print the chart
+print(election_cumulative_area_chart)
+
+# Step 9: Save the chart
+ggsave("election_cumulative_mentions_over_time.png", plot = election_cumulative_area_chart, width = 12, height = 8, dpi = 300)
+```
+
+#topic & airtime visualization
+```{r}
+# Step 1: Prepare cumulative airtime data (already filtered to election date)
+airtime_cumulative <- election_combined_airtime %>%
+  group_by(date) %>%
+  summarize(
+    trump_airtime_cumulative = sum(total_trump_airtime_seconds, na.rm = TRUE),
+    harris_airtime_cumulative = sum(total_harris_airtime_seconds, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  # Get cumulative sums across all dates
+  mutate(
+    trump_airtime_cumulative = cumsum(trump_airtime_cumulative),
+    harris_airtime_cumulative = cumsum(harris_airtime_cumulative)
+  )
+
+# Step 2: Prepare cumulative mentions data (aggregated across all topics)
+mentions_cumulative_all_topics <- election_mentions_cumulative %>%
+  group_by(date, mentioned_by) %>%
+  summarize(cumulative_mentions = sum(cumulative_mentions), .groups = "drop")
+
+# Step 3: Combine datasets for plotting
+combined_data <- airtime_cumulative %>%
+  left_join(
+    mentions_cumulative_all_topics %>%
+      pivot_wider(
+        names_from = mentioned_by,
+        values_from = cumulative_mentions,
+        names_prefix = "mentions_"
+      ),
+    by = "date"
+  )
+
+# Step 4: Create the visualization
+election_stacked_cumulative_plot <- ggplot(combined_data, aes(x = date)) +
+  # Stacked area for cumulative airtime
+  geom_area(aes(y = trump_airtime_cumulative, fill = "Trump Airtime"), position = "stack", alpha = 0.3) +
+  geom_area(aes(y = harris_airtime_cumulative, fill = "Harris Airtime"), position = "stack", alpha = 0.3) +
+  
+  # Dashed lines for cumulative mentions (scaled for visual comparison)
+  geom_line(aes(y = mentions_Trump * 60, color = "Trump Mentions"), 
+            linetype = "dashed", linewidth = 1.2) +
+  geom_line(aes(y = mentions_Harris * 60, color = "Harris Mentions"), 
+            linetype = "dashed", linewidth = 1.2) +
+  
+  # Election Day marker
+  geom_vline(xintercept = as.Date("2024-11-05"), 
+             linetype = "longdash", color = "black", linewidth = 0.7) +
+  annotate("text", x = as.Date("2024-11-05"), 
+           y = max(combined_data$trump_airtime_cumulative + combined_data$harris_airtime_cumulative, na.rm = TRUE) * 0.9,
+           label = "Election Day", angle = 90, hjust = -0.2, size = 4) +
+  
+  # Color scales
+  scale_fill_manual(
+    name = "Airtime (Area)",
+    values = c("Trump Airtime" = "red", "Harris Airtime" = "blue")
+  ) +
+  scale_color_manual(
+    name = "Mentions (Line)",
+    values = c("Trump Mentions" = "darkred", "Harris Mentions" = "darkblue")
+  ) +
+  
+  # Y-axis with secondary axis for mentions
+  scale_y_continuous(
+    name = "Cumulative Airtime (seconds)",
+    sec.axis = sec_axis(~./60, name = "Cumulative Topic Mentions")
+  ) +
+  
+  # Labels and styling
+  labs(
+    title = "Stacked Cumulative Airtime vs. Topic Mentions Over Time",
+    subtitle = "Stacked areas show total airtime; dashed lines show topic mentions",
+    x = "Date"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "top",
+    legend.box = "vertical",
+    panel.grid.minor = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 12, hjust = 0.5),
+    panel.background = element_rect(fill = "white", color = NA),
+    plot.background = element_rect(fill = "white", color = NA)
+  )
+
+# Step 5: Save the plot
+ggsave("election_stacked_cumulative_airtime_mentions_timeline.png", plot = election_stacked_cumulative_plot, width = 12, height = 8, dpi = 300)
 ```
