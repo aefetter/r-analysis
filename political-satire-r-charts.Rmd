@@ -155,71 +155,59 @@ str(snl_airtime$date)
 
 ### Airtime visualization for SNL
 ```{r}
-# Process the SNL airtime data
+# === PROCESSING SNL AIRTIME DATA ===
+
 snl_airtime_processed <- snl_airtime %>%
   mutate(
-    # Calculate total airtime in seconds for Trump and Harris
     total_trump_airtime_seconds = sapply(`trump air time stamps`, calculate_duration),
     total_harris_airtime_seconds = sapply(`harris air time stamps`, calculate_duration),
-    
-    # Convert airtime to minutes for easier interpretation
     total_trump_airtime_minutes = round(total_trump_airtime_seconds / 60, 2),
     total_harris_airtime_minutes = round(total_harris_airtime_seconds / 60, 2),
-    
-    # Correctly parse "run time (total)" from HH:MM:SS to total seconds
     episode_length_seconds = sapply(`run time (total)`, function(runtime) {
       time_parts <- unlist(strsplit(as.character(runtime), ":"))
-      # Handle HH:MM:SS format
       if (length(time_parts) == 3) {
-        as.numeric(time_parts[1]) * 3600 +  # Hours to seconds
-        as.numeric(time_parts[2]) * 60 +   # Minutes to seconds
-        as.numeric(time_parts[3])          # Seconds
+        as.numeric(time_parts[1]) * 3600 + as.numeric(time_parts[2]) * 60 + as.numeric(time_parts[3])
       } else if (length(time_parts) == 2) {
-        as.numeric(time_parts[1]) * 60 +   # Minutes to seconds
-        as.numeric(time_parts[2])          # Seconds
+        as.numeric(time_parts[1]) * 60 + as.numeric(time_parts[2])
       } else {
-        as.numeric(time_parts[1])          # Seconds only
+        as.numeric(time_parts[1])
       }
     }),
-    
-    # Convert the date column to Date format
     date = as.Date(date, format = "%d-%b-%y")
   )
-# Rebuild all_segments for SNL
-all_segments <- data.frame(
+
+# Build SNL segments
+snl_all_segments <- data.frame(
   start = numeric(0),
-  end = numeric(0), 
+  end = numeric(0),
   candidate = character(0),
   episode = character(0),
   stringsAsFactors = FALSE
 )
 
-# Loop through all episodes in snl_airtime_processed
 for (i in 1:nrow(snl_airtime_processed)) {
   episode <- snl_airtime_processed[i, ]
   episode_title <- paste0(
     str_remove(episode$show, "SNL "),
     " (", format(episode$date, "%b %d, %Y"), ")"
   )
-  
-  # Process Trump and Harris airtime
+
   trump_segments <- process_timestamps(episode$`trump air time stamps`, "Trump")
   harris_segments <- process_timestamps(episode$`harris air time stamps`, "Harris")
-  
-  # Add episode title to each segment
+
   if (nrow(trump_segments) > 0) {
     trump_segments$episode <- episode_title
-    all_segments <- rbind(all_segments, trump_segments)
+    snl_all_segments <- rbind(snl_all_segments, trump_segments)
   }
-  
+
   if (nrow(harris_segments) > 0) {
     harris_segments$episode <- episode_title
-    all_segments <- rbind(all_segments, harris_segments)
+    snl_all_segments <- rbind(snl_all_segments, harris_segments)
   }
 }
 
-# Create the episode_bars dataframe
-episode_bars <- snl_airtime_processed %>%
+# Clean and build episode bars
+snl_episode_bars <- snl_airtime_processed %>%
   mutate(
     episode = paste0(
       str_remove(show, "SNL "),
@@ -227,18 +215,7 @@ episode_bars <- snl_airtime_processed %>%
     ),
     episode_index = row_number()
   ) %>%
-  select(episode, episode_length_seconds, date, episode_index)
-
-  # Clean up the `episode` column in both data frames to ensure consistency
-all_segments <- all_segments %>%
-  mutate(
-    episode = gsub("\"", "'", episode),  # Replace double quotes with single quotes
-    episode = gsub("’", "'", episode),  # Replace fancy apostrophes with standard ones
-    episode = gsub("“|”", "'", episode), # Replace fancy quotes with standard ones
-    episode = str_trim(episode)          # Remove leading/trailing whitespace
-  )
-
-episode_bars <- episode_bars %>%
+  select(episode, episode_length_seconds, date, episode_index) %>%
   mutate(
     episode = gsub("\"", "'", episode),
     episode = gsub("’", "'", episode),
@@ -246,69 +223,119 @@ episode_bars <- episode_bars %>%
     episode = str_trim(episode)
   )
 
-# Add the episode index to all_segments by joining with episode_bars
-all_segments <- all_segments %>%
+snl_all_segments <- snl_all_segments %>%
+  mutate(
+    episode = gsub("\"", "'", episode),
+    episode = gsub("’", "'", episode),
+    episode = gsub("“|”", "'", episode),
+    episode = str_trim(episode)
+  )
+
+snl_all_segments <- snl_all_segments %>%
   left_join(
-    episode_bars %>% select(episode, episode_index),
+    snl_episode_bars %>% select(episode, episode_index),
     by = "episode"
   )
 
-  # Create the faceted visualization with pagination
-total_pages <- ceiling(nrow(episode_bars) / 12)  # Calculate total pages (12 episodes per page)
+# === FACETED PLOTTING (TLS STYLE, WITH DUMMY PANELS) ===
+
+episodes_per_page <- 12
+total_pages <- ceiling(nrow(snl_episode_bars) / episodes_per_page)
 
 for (page in 1:total_pages) {
-  # Calculate which episode indices belong on this page
-  page_indices <- ((page-1) * 12 + 1):(min(page * 12, nrow(episode_bars)))
+  page_indices <- ((page - 1) * episodes_per_page + 1):min(page * episodes_per_page, nrow(snl_episode_bars))
   
-  # Filter data for this page
-  page_bars <- episode_bars %>% filter(episode_index %in% page_indices)
-  page_segments <- all_segments %>% filter(episode_index %in% page_indices)
-  
-  # Generate the visualization for the current page
+  # Real episodes
+  page_bars <- snl_episode_bars %>%
+    filter(episode_index %in% page_indices) %>%
+    mutate(label = episode, is_dummy = FALSE)
+
+  page_segments <- snl_all_segments %>%
+    filter(episode_index %in% page_indices) %>%
+    left_join(page_bars %>% select(episode, label), by = "episode")
+
+  # Add dummy panels if needed
+  if (nrow(page_bars) < episodes_per_page) {
+    dummy_count <- episodes_per_page - nrow(page_bars)
+    dummy_labels <- paste0("dummy_", seq_len(dummy_count))
+    invisible_labels <- strrep(" ", seq_len(dummy_count))  # visually blank but unique
+    dummy_bars <- tibble(
+      episode = dummy_labels,
+      episode_length_seconds = 1,
+      date = NA,
+      episode_index = max(page_bars$episode_index, na.rm = TRUE) + seq_len(dummy_count),
+      label = invisible_labels,
+      is_dummy = TRUE
+    )
+    page_bars <- bind_rows(page_bars, dummy_bars)
+  }
+
+  page_bars$label <- factor(page_bars$label, levels = page_bars$label)
+  page_segments$label <- factor(page_segments$label, levels = levels(page_bars$label))
+
+  dummy_segments <- page_bars %>%
+    filter(is_dummy) %>%
+    mutate(start = NA_real_, end = NA_real_, candidate = "dummy") %>%
+    select(label, start, end, candidate)
+
+  all_page_segments <- bind_rows(page_segments, dummy_segments)
+
   paginated_vis <- ggplot() +
-    # Draw the full episode bar (grey) for all episodes
     geom_rect(
-      data = page_bars,
-      aes(xmin = 0, xmax = episode_length_seconds, ymin = 0, ymax = 1, group = episode),
+      data = page_bars %>% filter(!is_dummy),
+      aes(xmin = 0, xmax = episode_length_seconds, ymin = 0, ymax = 1),
       fill = "grey90", color = "black", linewidth = 0.3
     ) +
-    
-    # Add Trump segments
     geom_rect(
-      data = filter(page_segments, candidate == "Trump"),
-      aes(xmin = start, xmax = end, ymin = 0.5, ymax = 1, group = episode),
-      fill = "red", alpha = 0.8
+      data = filter(all_page_segments, candidate == "Trump"),
+      aes(xmin = start, xmax = end, ymin = 0.5, ymax = 1),
+      fill = "#e74c3c", alpha = 0.8
     ) +
-    
-    # Add Harris segments
     geom_rect(
-      data = filter(page_segments, candidate == "Harris"),
-      aes(xmin = start, xmax = end, ymin = 0, ymax = 0.5, group = episode),
-      fill = "blue", alpha = 0.8
+      data = filter(all_page_segments, candidate == "Harris"),
+      aes(xmin = start, xmax = end, ymin = 0, ymax = 0.5),
+      fill = "#2980b9", alpha = 0.8
     ) +
-    
-    # Add tick marks for every minute and every 15 seconds
+    geom_rect(
+      data = filter(all_page_segments, candidate == "dummy"),
+      aes(xmin = start, xmax = end, ymin = 0, ymax = 1),
+      fill = NA, color = NA
+    ) +
     scale_x_continuous(
-      breaks = seq(0, max(page_bars$episode_length_seconds, na.rm = TRUE), by = 60),  # Tick marks every minute
-      minor_breaks = seq(0, max(page_bars$episode_length_seconds, na.rm = TRUE), by = 15),  # Minor tick marks every 15 seconds
-      labels = function(x) sprintf("%d:%02d", x %/% 60, x %% 60)  # Format as mm:ss
+      breaks = waiver(),
+      labels = function(x) sprintf("%d:%02d", as.integer(x) %/% 60, as.integer(x) %% 60)
     ) +
-    
-    # Facet by episode, ordered by the original data order
-    facet_wrap(~ reorder(episode, episode_index), ncol = 1, scales = "free_x") +
-    
-    # Add labels and theme
+    facet_wrap(~ label, ncol = 1, nrow = episodes_per_page, scales = "free_x") +
     labs(
-      title = paste0("Saturday Night Live Airtime by Candidate (Page ", page, ")"),
-      subtitle = "Red: Trump Airtime | Blue: Harris Airtime",
+      title = paste0("Saturday Night Live Candidate Airtime (Page ", page, " of ", total_pages, ")"),
+      subtitle = "Red: Trump | Blue: Harris",
       x = "Time (minutes:seconds)",
       y = NULL
     ) +
-    theme_academic()
-  
-  # Save the current page
-  save_academic_chart(paginated_vis, paste0("snl_airtime_faceted_page", page, ".pdf"), width = 8.5, height = 11)
+    theme_minimal(base_size = 9) +
+    theme(
+      strip.text = element_text(size = 8, hjust = 0),
+      strip.background = element_blank(),
+      axis.text.y = element_blank(),
+      axis.ticks.y = element_blank(),
+      axis.title.y = element_blank(),
+      panel.grid = element_blank(),
+      panel.spacing = unit(0.1, "lines"),
+      plot.title = element_text(size = 10, face = "bold"),
+      plot.subtitle = element_text(size = 8),
+      plot.margin = margin(8, 8, 8, 8)
+    )
+
+  ggsave(
+    filename = paste0("snl_airtime_page", page, ".jpeg"),
+    plot = paginated_vis,
+    width = 7,
+    height = 10.5,
+    dpi = 300,
+    device = "jpeg"
+  )
 }
+
 ```
 
 ### Topic analysis for snl
@@ -521,71 +548,137 @@ unique(LWT_airtime_processed$date)
 ```
 
 ```{r}
-# Step 3: Create the episode_bars dataframe
+# Create episode index for pagination
 episode_bars_lwt <- LWT_airtime_processed %>%
   mutate(
     episode = paste0(
       show,
       " (", format(date, "%b %d, %Y"), ")"
-    )
+    ),
+    episode_index = row_number()
   ) %>%
-  select(episode, episode_length_seconds, date) %>%
-  arrange(date)  # Sort by air date
+  select(episode, episode_length_seconds, date, episode_index) %>%
+  mutate(
+    episode = gsub("\"", "'", episode),
+    episode = gsub("’", "'", episode),
+    episode = gsub("“|”", "'", episode),
+    episode = str_trim(episode)
+  )
 
-# Set episode factor levels in order of air date
-episode_bars_lwt <- episode_bars_lwt %>%
-  mutate(episode = factor(episode, levels = episode))
-```
+all_segments_lwt <- all_segments_lwt %>%
+  mutate(
+    episode = gsub("\"", "'", episode),
+    episode = gsub("’", "'", episode),
+    episode = gsub("“|”", "'", episode),
+    episode = str_trim(episode)
+  ) %>%
+  left_join(
+    episode_bars_lwt %>% select(episode, episode_index),
+    by = "episode"
+  )
 
-```{r}
-# Step 4: Create the faceted visualization
-all_episodes_vis_lwt <- ggplot() +
-  # Draw the full episode bar (grey) for all episodes
-  geom_rect(
-    data = episode_bars_lwt,
-    aes(xmin = 0, xmax = episode_length_seconds, ymin = 0, ymax = 1, group = episode),
-    fill = "grey90", color = "black", size = 0.3
-  ) +
-  
-  # Add Trump segments
-  geom_rect(
-    data = filter(all_segments_lwt, candidate == "Trump"),
-    aes(xmin = start, xmax = end, ymin = 0.5, ymax = 1, group = episode),
-    fill = "red", alpha = 0.8
-  ) +
-  
-  # Add Harris segments
-  geom_rect(
-    data = filter(all_segments_lwt, candidate == "Harris"),
-    aes(xmin = start, xmax = end, ymin = 0, ymax = 0.5, group = episode),
-    fill = "blue", alpha = 0.8
-  ) +
-  
-  # Add tick marks for every minute and every 15 seconds
-scale_x_continuous(
-    breaks = seq(0, max(episode_bars_lwt$episode_length_seconds), by = 300),  # Tick marks every 5 minutes (300 seconds)
-    minor_breaks = seq(0, max(episode_bars_lwt$episode_length_seconds), by = 60),  # Minor tick marks every 1 minute
-    labels = function(x) sprintf("%d:%02d", x %/% 60, x %% 60)  # Format as mm:ss
-  ) +
-  
-  # Facet by episode, in air-date order
-  facet_wrap(~ episode, ncol = 1, scales = "free_x") +
-  
-  # Add labels and theme
-  labs(
-    title = "Last Week Tonight with John Oliver Airtime by Candidate",
-    subtitle = "Red: Trump Airtime | Blue: Harris Airtime",
-    x = "Time (minutes:seconds)",
-    y = NULL
-  ) +
-  theme_academic()  # Apply the custom theme
+# === PAGINATED FACETED PLOTS FOR LWT ===
 
-# Save the chart without coord_fixed()
-all_episodes_vis_lwt <- all_episodes_vis_lwt +
-  facet_wrap(~ episode, ncol = 1, scales = "free_x")  # Keep free_x for independent scales
+episodes_per_page <- 12
+total_pages <- ceiling(nrow(episode_bars_lwt) / episodes_per_page)
 
-# Save the chart
-save_academic_chart(all_episodes_vis_lwt, "lwt_airtime_faceted.pdf", width = 8, height = 11)
+for (page in 1:total_pages) {
+  page_indices <- ((page - 1) * episodes_per_page + 1):min(page * episodes_per_page, nrow(episode_bars_lwt))
+  
+  # Real episodes
+  page_bars <- episode_bars_lwt %>%
+    filter(episode_index %in% page_indices) %>%
+    mutate(label = episode, is_dummy = FALSE)
+
+  page_segments <- all_segments_lwt %>%
+    filter(episode_index %in% page_indices) %>%
+    left_join(page_bars %>% select(episode, label), by = "episode")
+
+  # Add dummy rows if needed
+  if (nrow(page_bars) < episodes_per_page) {
+    dummy_count <- episodes_per_page - nrow(page_bars)
+    dummy_labels <- paste0("dummy_", seq_len(dummy_count))
+    invisible_labels <- strrep(" ", seq_len(dummy_count))
+    dummy_bars <- tibble(
+      episode = dummy_labels,
+      episode_length_seconds = 1,
+      date = NA,
+      episode_index = max(page_bars$episode_index, na.rm = TRUE) + seq_len(dummy_count),
+      label = invisible_labels,
+      is_dummy = TRUE
+    )
+    page_bars <- bind_rows(page_bars, dummy_bars)
+  }
+
+  # Set facet order
+  page_bars$label <- factor(page_bars$label, levels = page_bars$label)
+  page_segments$label <- factor(page_segments$label, levels = levels(page_bars$label))
+
+  # Dummy segments
+  dummy_segments <- page_bars %>%
+    filter(is_dummy) %>%
+    mutate(start = NA_real_, end = NA_real_, candidate = "dummy") %>%
+    select(label, start, end, candidate)
+
+  all_page_segments <- bind_rows(page_segments, dummy_segments)
+
+  # Plot
+  paginated_vis <- ggplot() +
+    geom_rect(
+      data = page_bars %>% filter(!is_dummy),
+      aes(xmin = 0, xmax = episode_length_seconds, ymin = 0, ymax = 1),
+      fill = "grey90", color = "black", linewidth = 0.3
+    ) +
+    geom_rect(
+      data = filter(all_page_segments, candidate == "Trump"),
+      aes(xmin = start, xmax = end, ymin = 0.5, ymax = 1),
+      fill = "#e74c3c", alpha = 0.8
+    ) +
+    geom_rect(
+      data = filter(all_page_segments, candidate == "Harris"),
+      aes(xmin = start, xmax = end, ymin = 0, ymax = 0.5),
+      fill = "#2980b9", alpha = 0.8
+    ) +
+    geom_rect(
+      data = filter(all_page_segments, candidate == "dummy"),
+      aes(xmin = start, xmax = end, ymin = 0, ymax = 1),
+      fill = NA, color = NA
+    ) +
+    scale_x_continuous(
+      breaks = waiver(),
+      labels = function(x) sprintf("%d:%02d", as.integer(x) %/% 60, as.integer(x) %% 60)
+    ) +
+    facet_wrap(~ label, ncol = 1, nrow = episodes_per_page, scales = "free_x") +
+    labs(
+      title = paste0("Last Week Tonight Candidate Airtime (Page ", page, " of ", total_pages, ")"),
+      subtitle = "Red: Trump | Blue: Harris",
+      x = "Time (minutes:seconds)",
+      y = NULL
+    ) +
+    theme_minimal(base_size = 9) +
+    theme(
+      strip.text = element_text(size = 8, hjust = 0),
+      strip.background = element_blank(),
+      axis.text.y = element_blank(),
+      axis.ticks.y = element_blank(),
+      axis.title.y = element_blank(),
+      panel.grid = element_blank(),
+      panel.spacing = unit(0.1, "lines"),
+      plot.title = element_text(size = 10, face = "bold"),
+      plot.subtitle = element_text(size = 8),
+      plot.margin = margin(8, 8, 8, 8)
+    )
+
+  ggsave(
+    filename = paste0("lwt_airtime_page", page, ".jpeg"),
+    plot = paginated_vis,
+    width = 7,
+    height = 10.5,
+    dpi = 300,
+    device = "jpeg"
+  )
+}
+
 ```
 
 ```{r}
@@ -833,59 +926,118 @@ total_pages <- ceiling(length(unique(episode_bars_tls$episode)) / 12)  # Calcula
 
 # Find the maximum episode length across all episodes
 max_episode_length <- max(episode_bars_tls$episode_length_seconds, na.rm = TRUE)
+episodes_per_page <- 12
+total_pages <- ceiling(nrow(episode_bars_tls) / episodes_per_page)
 
 for (page in 1:total_pages) {
-  # Calculate which episode indices belong on this page
-  page_indices <- ((page-1) * 12 + 1):(min(page * 12, nrow(episode_bars_tls)))
+  page_indices <- ((page - 1) * episodes_per_page + 1):min(page * episodes_per_page, nrow(episode_bars_tls))
   
-  # Filter data for this page
-  page_bars <- episode_bars_tls %>% filter(episode_index %in% page_indices)
-  page_segments <- all_segments_tls %>% filter(episode_index %in% page_indices)
-  
-  # Generate the visualization for the current page
+  # Real episodes
+  page_bars <- episode_bars_tls %>%
+    filter(episode_index %in% page_indices) %>%
+    mutate(label = episode, is_dummy = FALSE)
+
+  page_segments <- all_segments_tls %>%
+    filter(episode_index %in% page_indices) %>%
+    left_join(page_bars %>% select(episode, label), by = "episode")
+
+  # Add dummy rows if needed
+  if (nrow(page_bars) < episodes_per_page) {
+    dummy_count <- episodes_per_page - nrow(page_bars)
+    dummy_labels <- paste0("dummy_", seq_len(dummy_count))
+    invisible_labels <- strrep(" ", seq_len(dummy_count))  # unique blank-looking labels
+    dummy_bars <- tibble(
+      episode = dummy_labels,
+      episode_length_seconds = 1,
+      date = NA,
+      episode_index = max(page_bars$episode_index, na.rm = TRUE) + seq_len(dummy_count),
+      label = invisible_labels,
+      is_dummy = TRUE
+    )
+    page_bars <- bind_rows(page_bars, dummy_bars)
+  }
+
+  # Ensure consistent facet layout
+  page_bars$label <- factor(page_bars$label, levels = page_bars$label)
+  page_segments$label <- factor(page_segments$label, levels = levels(page_bars$label))
+
+  # Dummy segments to force dummy panels (but with no data to suppress axis ticks)
+  dummy_segments <- page_bars %>%
+    filter(is_dummy) %>%
+    mutate(
+      start = NA_real_,
+      end = NA_real_,
+      candidate = "dummy"
+    ) %>%
+    select(label, start, end, candidate)
+
+  all_page_segments <- bind_rows(page_segments, dummy_segments)
+
+  # Final plot
   paginated_vis <- ggplot() +
-    # Draw the full episode bar (grey) for all episodes
+    # Background bars for real episodes
     geom_rect(
-      data = page_bars,
-      aes(xmin = 0, xmax = episode_length_seconds, ymin = 0, ymax = 1, group = episode),
+      data = page_bars %>% filter(!is_dummy),
+      aes(xmin = 0, xmax = episode_length_seconds, ymin = 0, ymax = 1),
       fill = "grey90", color = "black", linewidth = 0.3
     ) +
-    
-    # Add Trump segments
+    # Trump segments
     geom_rect(
-      data = filter(page_segments, candidate == "Trump"),
-      aes(xmin = start, xmax = end, ymin = 0.5, ymax = 1, group = episode),
-      fill = "red", alpha = 0.8
+      data = filter(all_page_segments, candidate == "Trump"),
+      aes(xmin = start, xmax = end, ymin = 0.5, ymax = 1),
+      fill = "#e74c3c", alpha = 0.8
+    ) +
+    # Harris segments
+    geom_rect(
+      data = filter(all_page_segments, candidate == "Harris"),
+      aes(xmin = start, xmax = end, ymin = 0, ymax = 0.5),
+      fill = "#2980b9", alpha = 0.8
+    ) +
+    # Dummy rows will be drawn but contain no data or ticks
+    geom_rect(
+      data = filter(all_page_segments, candidate == "dummy"),
+      aes(xmin = start, xmax = end, ymin = 0, ymax = 1),
+      fill = NA, color = NA
     ) +
     
-    # Add Harris segments
-    geom_rect(
-      data = filter(page_segments, candidate == "Harris"),
-      aes(xmin = start, xmax = end, ymin = 0, ymax = 0.5, group = episode),
-      fill = "blue", alpha = 0.8
-    ) +
-    
-    # Add0. tick marks for every mi0.nute and every 15 seconds
+    # ⏱️ X-axis (time) formatting
     scale_x_continuous(
-      breaks = seq(0, max(episode_bars_tls$episode_length_seconds, na.rm = TRUE), by = 60),  # Tick marks every minute
-      minor_breaks = seq(0, max(episode_bars_tls$episode_length_seconds, na.rm = TRUE), by = 15),  # Minor tick marks every 15 seconds
-      labels = function(x) sprintf("%d:%02d", x %/% 60, x %% 60)  # Format as mm:ss
+      breaks = waiver(),
+      labels = function(x) sprintf("%d:%02d", as.integer(x) %/% 60, as.integer(x) %% 60)
     ) +
     
-    # Facet by episode, ordered by the original data order
-    facet_wrap(~ reorder(episode, episode_index), ncol = 1, scales = "free_x") +
-    
-    # Add labels and theme
+    facet_wrap(~ label, ncol = 1, nrow = episodes_per_page, scales = "free_x") +
+
     labs(
-      title = "The Late Show with Stephen Colbert Airtime by Candidate",
-      subtitle = "Red: Trump Airtime | Blue: Harris Airtime",
+      title = paste0("The Late Show Candidate Airtime (Page ", page, " of ", total_pages, ")"),
+      subtitle = "Red: Trump | Blue: Harris",
       x = "Time (minutes:seconds)",
       y = NULL
     ) +
-    theme_academic()
-  
-  # Save the current page
-  save_academic_chart(paginated_vis, paste0("tls_airtime_faceted_page", page, ".pdf"), width = 8.5, height = 11)
+
+    theme_minimal(base_size = 9) +
+    theme(
+      strip.text = element_text(size = 8, hjust = 0),
+      strip.background = element_blank(),
+      axis.text.y = element_blank(),
+      axis.ticks.y = element_blank(),
+      axis.title.y = element_blank(),
+      panel.grid = element_blank(),
+      panel.spacing = unit(0.1, "lines"),
+      plot.title = element_text(size = 10, face = "bold"),
+      plot.subtitle = element_text(size = 8),
+      plot.margin = margin(8, 8, 8, 8)
+    )
+
+  # Save
+  ggsave(
+    filename = paste0("tls_airtime_faceted_page", page, ".jpeg"),
+    plot = paginated_vis,
+    width = 7,
+    height = 10.5,
+    dpi = 300,
+    device = "jpeg"
+  )
 }
 ```
 
@@ -997,73 +1149,61 @@ tds_airtime <- tds_airtime %>%
 
 #airtime visualization for TDS
 ```{r}
-# Step 1: Process the TDS airtime data
+# === STEP 1: Process The Daily Show Airtime Data ===
+
 tds_airtime_processed <- tds_airtime %>%
   mutate(
-    # Calculate total airtime in seconds for Trump and Harris
     total_trump_airtime_seconds = sapply(`trump air time stamps`, calculate_duration),
     total_harris_airtime_seconds = sapply(`harris air time stamps`, calculate_duration),
-    
-    # Convert airtime to minutes for easier interpretation
     total_trump_airtime_minutes = round(total_trump_airtime_seconds / 60, 2),
     total_harris_airtime_minutes = round(total_harris_airtime_seconds / 60, 2),
-    
-    # Correctly parse "run time (total)" from HH:MM:SS to total seconds
     episode_length_seconds = sapply(`run time (total)`, function(runtime) {
       time_parts <- unlist(strsplit(as.character(runtime), ":"))
-      # Handle HH:MM:SS format
       if (length(time_parts) == 3) {
-        as.numeric(time_parts[1]) * 3600 +  # Hours to seconds
-        as.numeric(time_parts[2]) * 60 +    # Minutes to seconds
-        as.numeric(time_parts[3])           # Seconds
+        as.numeric(time_parts[1]) * 3600 + as.numeric(time_parts[2]) * 60 + as.numeric(time_parts[3])
       } else if (length(time_parts) == 2) {
-        as.numeric(time_parts[1]) * 60 +    # Minutes to seconds
-        as.numeric(time_parts[2])           # Seconds
+        as.numeric(time_parts[1]) * 60 + as.numeric(time_parts[2])
       } else {
-        as.numeric(time_parts[1])           # Seconds only
+        as.numeric(time_parts[1])
       }
     }),
-    
-    # Convert the date column to Date format (adjust format if needed)
     date = as.Date(date, format = "%d-%b-%y")
   )
 
-# Step 2: Create segments for visualization
+# === STEP 2: Build Segments for Visualization ===
+
 all_segments_tds <- data.frame(
   start = numeric(0),
-  end = numeric(0), 
+  end = numeric(0),
   candidate = character(0),
   episode = character(0),
   stringsAsFactors = FALSE
 )
 
-# Loop through all episodes in tds_airtime_processed
 for (i in 1:nrow(tds_airtime_processed)) {
   episode <- tds_airtime_processed[i, ]
   episode_title <- paste0(
     episode$show,
     " (", format(episode$date, "%b %d, %Y"), ")"
   )
-  
-  # Process Trump and Harris airtime
+
   trump_segments <- process_timestamps(episode$`trump air time stamps`, "Trump")
   harris_segments <- process_timestamps(episode$`harris air time stamps`, "Harris")
-  
-  # Add episode title to each segment
+
   if (nrow(trump_segments) > 0) {
     trump_segments$episode <- episode_title
     all_segments_tds <- rbind(all_segments_tds, trump_segments)
   }
-  
+
   if (nrow(harris_segments) > 0) {
     harris_segments$episode <- episode_title
     all_segments_tds <- rbind(all_segments_tds, harris_segments)
   }
 }
 
-# Step 3: Create episode bars dataframe with episode index
+# === STEP 3: Build Episode Bars with Cleaned Labels ===
+
 episode_bars_tds <- tds_airtime_processed %>%
-  arrange(date) %>%
   mutate(
     episode = paste0(
       show,
@@ -1071,80 +1211,125 @@ episode_bars_tds <- tds_airtime_processed %>%
     ),
     episode_index = row_number()
   ) %>%
-  select(episode, episode_length_seconds, date, episode_index)
+  select(episode, episode_length_seconds, date, episode_index) %>%
+  mutate(
+    episode = gsub("\"", "'", episode),
+    episode = gsub("’", "'", episode),
+    episode = gsub("“|”", "'", episode),
+    episode = str_trim(episode)
+  )
 
-# Clean up the episode column
-#episode_bars_tds <- episode_bars_tds %>%
-  #mutate(
-    #episode = gsub("\"", "'", episode),
-    #episode = gsub("'", "'", episode),
-    #episode = gsub(""|"", "'", episode),
-    #episode = str_trim(episode)
-  #)
-
-# Add the episode index to all_segments_tds
 all_segments_tds <- all_segments_tds %>%
+  mutate(
+    episode = gsub("\"", "'", episode),
+    episode = gsub("’", "'", episode),
+    episode = gsub("“|”", "'", episode),
+    episode = str_trim(episode)
+  ) %>%
   left_join(
     episode_bars_tds %>% select(episode, episode_index),
     by = "episode"
   )
 
-# Step 4: Create the faceted visualization with pagination
-total_pages <- ceiling(nrow(episode_bars_tds) / 12)  # 12 episodes per page
+# === STEP 4: Paginated Visualization ===
+
+episodes_per_page <- 12
+total_pages <- ceiling(nrow(episode_bars_tds) / episodes_per_page)
 
 for (page in 1:total_pages) {
-  # Calculate which episode indices belong on this page
-  page_indices <- ((page-1) * 12 + 1):(min(page * 12, nrow(episode_bars_tds)))
+  page_indices <- ((page - 1) * episodes_per_page + 1):min(page * episodes_per_page, nrow(episode_bars_tds))
   
-  # Filter data for this page
-  page_bars <- episode_bars_tds %>% filter(episode_index %in% page_indices)
-  page_segments <- all_segments_tds %>% filter(episode_index %in% page_indices)
-  
-  # Generate the visualization for the current page
+  page_bars <- episode_bars_tds %>%
+    filter(episode_index %in% page_indices) %>%
+    mutate(label = episode, is_dummy = FALSE)
+
+  page_segments <- all_segments_tds %>%
+    filter(episode_index %in% page_indices) %>%
+    left_join(page_bars %>% select(episode, label), by = "episode")
+
+  # Add dummy rows if needed
+  if (nrow(page_bars) < episodes_per_page) {
+    dummy_count <- episodes_per_page - nrow(page_bars)
+    dummy_labels <- paste0("dummy_", seq_len(dummy_count))
+    invisible_labels <- strrep(" ", seq_len(dummy_count))
+    dummy_bars <- tibble(
+      episode = dummy_labels,
+      episode_length_seconds = 1,
+      date = NA,
+      episode_index = max(page_bars$episode_index, na.rm = TRUE) + seq_len(dummy_count),
+      label = invisible_labels,
+      is_dummy = TRUE
+    )
+    page_bars <- bind_rows(page_bars, dummy_bars)
+  }
+
+  page_bars$label <- factor(page_bars$label, levels = page_bars$label)
+  page_segments$label <- factor(page_segments$label, levels = levels(page_bars$label))
+
+  dummy_segments <- page_bars %>%
+    filter(is_dummy) %>%
+    mutate(start = NA_real_, end = NA_real_, candidate = "dummy") %>%
+    select(label, start, end, candidate)
+
+  all_page_segments <- bind_rows(page_segments, dummy_segments)
+
   paginated_vis <- ggplot() +
-    # Draw the full episode bar (grey) for all episodes
     geom_rect(
-      data = page_bars,
-      aes(xmin = 0, xmax = episode_length_seconds, ymin = 0, ymax = 1, group = episode),
+      data = page_bars %>% filter(!is_dummy),
+      aes(xmin = 0, xmax = episode_length_seconds, ymin = 0, ymax = 1),
       fill = "grey90", color = "black", linewidth = 0.3
     ) +
-    
-    # Add Trump segments
     geom_rect(
-      data = filter(page_segments, candidate == "Trump"),
-      aes(xmin = start, xmax = end, ymin = 0.5, ymax = 1, group = episode),
-      fill = "red", alpha = 0.8
+      data = filter(all_page_segments, candidate == "Trump"),
+      aes(xmin = start, xmax = end, ymin = 0.5, ymax = 1),
+      fill = "#e74c3c", alpha = 0.8
     ) +
-    
-    # Add Harris segments
     geom_rect(
-      data = filter(page_segments, candidate == "Harris"),
-      aes(xmin = start, xmax = end, ymin = 0, ymax = 0.5, group = episode),
-      fill = "blue", alpha = 0.8
+      data = filter(all_page_segments, candidate == "Harris"),
+      aes(xmin = start, xmax = end, ymin = 0, ymax = 0.5),
+      fill = "#2980b9", alpha = 0.8
     ) +
-    
-    # Add tick marks for every minute and every 15 seconds
+    geom_rect(
+      data = filter(all_page_segments, candidate == "dummy"),
+      aes(xmin = start, xmax = end, ymin = 0, ymax = 1),
+      fill = NA, color = NA
+    ) +
     scale_x_continuous(
-      breaks = seq(0, max(page_bars$episode_length_seconds, na.rm = TRUE), by = 120),  # Tick marks every 2 minutes
-      minor_breaks = seq(0, max(page_bars$episode_length_seconds, na.rm = TRUE), by = 60),  # Minor tick marks every minute
-      labels = function(x) sprintf("%d:%02d", x %/% 60, x %% 60)  # Format as mm:ss
+      breaks = waiver(),
+      labels = function(x) sprintf("%d:%02d", as.integer(x) %/% 60, as.integer(x) %% 60)
     ) +
-    
-    # Facet by episode, ordered by the original data order
-    facet_wrap(~ reorder(episode, episode_index), ncol = 1, scales = "free_x") +
-    
-    # Add labels and theme
+    facet_wrap(~ label, ncol = 1, nrow = episodes_per_page, scales = "free_x") +
     labs(
-      title = paste0("The Daily Show Airtime by Candidate (Page ", page, ")"),
-      subtitle = "Red: Trump Airtime | Blue: Harris Airtime",
+      title = paste0("The Daily Show Candidate Airtime (Page ", page, " of ", total_pages, ")"),
+      subtitle = "Red: Trump | Blue: Harris",
       x = "Time (minutes:seconds)",
       y = NULL
     ) +
-    theme_academic()
-  
-  # Save the current page
-  save_academic_chart(paginated_vis, paste0("tds_airtime_faceted_page", page, ".pdf"), width = 8.5, height = 11)
+    theme_minimal(base_size = 9) +
+    theme(
+      strip.text = element_text(size = 8, hjust = 0),
+      strip.background = element_blank(),
+      axis.text.y = element_blank(),
+      axis.ticks.y = element_blank(),
+      axis.title.y = element_blank(),
+      panel.grid = element_blank(),
+      panel.spacing = unit(0.1, "lines"),
+      plot.title = element_text(size = 10, face = "bold"),
+      plot.subtitle = element_text(size = 8),
+      plot.margin = margin(8, 8, 8, 8)
+    )
+
+  ggsave(
+    filename = paste0("tds_airtime_page", page, ".jpeg"),
+    plot = paginated_vis,
+    width = 7,
+    height = 10.5,
+    dpi = 300,
+    device = "jpeg"
+  )
 }
+
+
 ```
 
 # Topic Visualization for TDS
@@ -1243,9 +1428,6 @@ ggsave("tds_heatmap_topics.png", plot = tds_heatmap_plot, width = 12, height = 6
 ```
 # Graph analyzing how airtime and topics change based on if the host is male or female
 ```{r}
-library(dplyr)
-library(ggplot2)
-
 # Categorize host gender and calculate percentages
 tds_host_gender <- tds_topics %>%
   #drop when there is no host gender
@@ -1702,3 +1884,5 @@ ggplot(combined_data, aes(x = date)) +
 # Save the plot
 ggsave("stacked_cumulative_airtime_mentions_timeline.png", width = 12, height = 8, dpi = 300)
 ```
+
+
