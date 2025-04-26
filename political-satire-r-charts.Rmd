@@ -1408,7 +1408,8 @@ ggplot(tds_host_gender, aes(x = "", y = n, fill = Gender_Category)) +
     "Male" = "#006400"     # dark green
   ))
 
-
+# Save the heatmap
+ggsave("tds_gender_split.png", plot = tds_heatmap_plot, width = 12, height = 6, dpi = 300)
 ```
 ```{r}
 unique(tds_topics$`Gender of Host`)
