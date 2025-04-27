@@ -1394,7 +1394,7 @@ tds_host_gender <- tds_topics %>%
          Label = paste0(Gender_Category, ": ", n, " (", Percent, "%)"))
 
 # Create pie chart
-ggplot(tds_host_gender, aes(x = "", y = n, fill = Gender_Category)) +
+tds_host_gender_plot <- ggplot(tds_host_gender, aes(x = "", y = n, fill = Gender_Category)) +
   geom_col(width = 1, color = "white") +
   coord_polar(theta = "y") +
   labs(
@@ -1409,8 +1409,9 @@ ggplot(tds_host_gender, aes(x = "", y = n, fill = Gender_Category)) +
   ))
 
 # Save the heatmap
-ggsave("tds_gender_split.png", plot = tds_heatmap_plot, width = 12, height = 6, dpi = 300)
+ggsave("tds_host_gender_plot.png", plot = tds_host_gender_plot, width = 12, height = 6, dpi = 300)
 ```
+
 ```{r}
 unique(tds_topics$`Gender of Host`)
 ```
